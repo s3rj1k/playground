@@ -1,0 +1,187 @@
+# ref: https://github.com/tinkerbell/cluster-api-provider-tinkerbell/blob/main/.github/workflows/build-image.yaml
+name: Kubernetes Image Builder
+on:
+  workflow_dispatch:
+    inputs:
+      os_image:
+        description: "OS Image"
+        required: true
+        type: choice
+        options:
+          - ubuntu-2004
+          - flatcar
+      kubernetes_series:
+        description: "Kubernetes Series"
+        required: true
+        type: choice
+        options:
+          - "1.32"
+          - "1.31"
+          - "1.30"
+          - "1.29"
+      kubernetes_semantic_version_patch:
+        description: "Kubernetes patch version"
+        required: true
+        type: choice
+        options:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
+          - 8
+          - 9
+          - 10
+          - 11
+          - 12
+          - 13
+          - 14
+          - 15
+          - 16
+          - 17
+          - 18
+          - 19
+          - 20
+          - 21
+          - 22
+          - 23
+          - 24
+      kubernetes_deb_package_version:
+        description: "Kubernetes Debian package version"
+        required: true
+        default: "1.1"
+        type: string
+      virtualization_accelerator:
+        description: "Virtualization accelerator"
+        required: true
+        type: choice
+        options:
+          - "kvm"
+          - "tcg"
+
+permissions:
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BUILDER_VERSION: v0.1.40
+  OS_IMAGE: ${{ github.event.inputs.os_image }}
+  # https://github.com/osism/k8s-capi-images/blob/main/extra_vars_131.json
+  KUBERNETES_SERIES: v${{ github.event.inputs.kubernetes_series }}
+  KUBERNETES_SEM_VERSION: v${{ github.event.inputs.kubernetes_series }}.${{ github.event.inputs.kubernetes_semantic_version_patch }}
+  # https://kubernetes.io/blog/2023/08/15/pkgs-k8s-io-introduction/#what-are-significant-differences-between-the-google-hosted-and-kubernetes-package-repositories
+  KUBERNETES_DEB_VERSION: ${{ github.event.inputs.kubernetes_series }}.${{ github.event.inputs.kubernetes_semantic_version_patch }}-${{ github.event.inputs.kubernetes_deb_package_version }}
+  KUBERNETES_RPM_VERSION: ${{ github.event.inputs.kubernetes_series }}.${{ github.event.inputs.kubernetes_semantic_version_patch }}
+
+jobs:
+  build:
+    name: "Build ${{ github.event.inputs.os_image }} with Kubernetes ${{ github.event.inputs.kubernetes_series }}.${{ github.event.inputs.kubernetes_semantic_version_patch }}"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        shell: bash
+        run: |
+          sudo -E apt update
+          sudo -E apt install -y \
+            bridge-utils \
+            cpu-checker \
+            jq \
+            libguestfs-tools \
+            libosinfo-bin \
+            libvirt-clients \
+            libvirt-daemon-system \
+            patch \
+            qemu-kvm \
+            qemu-system-x86 \
+            unzip \
+            virtinst \
+            wget \
+            yq
+
+      # https://github.blog/changelog/2024-04-02-github-actions-hardware-accelerated-android-virtualization-now-available/
+      - name: Enable KVM group perms
+        if: inputs.virtualization_accelerator == 'kvm'
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo usermod -a -G kvm,libvirt $USER
+
+      - name: Checkout image-builder repository
+        uses: actions/checkout@v4
+        with:
+          repository: kubernetes-sigs/image-builder
+          path: image-builder
+          ref: ${{ env.IMAGE_BUILDER_VERSION }}
+
+      - name: Install build dependencies
+        working-directory: image-builder/images/capi
+        shell: bash
+        run: |
+          make deps-raw
+          packer plugins install github.com/hashicorp/qemu
+
+      # https://image-builder.sigs.k8s.io/capi/capi
+      - name: Create Kubernetes configuration
+        working-directory: image-builder/images/capi
+        shell: bash
+        run: |
+          cat << EOF > packer/raw/overwrite-kubernetes.json
+          {
+            "accelerator": "${{ inputs.virtualization_accelerator }}",
+            "kubernetes_series": "${KUBERNETES_SERIES}",
+            "kubernetes_semver": "${KUBERNETES_SEM_VERSION}",
+            "kubernetes_deb_version": "${KUBERNETES_DEB_VERSION}",
+            "kubernetes_rpm_version": "${KUBERNETES_RPM_VERSION}"
+          }
+          EOF
+
+      # https://github.com/kubernetes-sigs/image-builder/issues/1075
+      # https://github.com/kubernetes-sigs/image-builder/issues/1638
+      - name: Update Packer vars_inline configuration
+        working-directory: image-builder/images/capi
+        shell: bash
+        run: |
+          jq '
+            .provisioners |= map(
+              if .type == "goss" then
+                .vars_inline.OS_VERSION = "{{user `distro_version` | lower}}"
+              else
+                .
+              end
+            )
+          ' packer/raw/packer.json.tmpl | tee packer/raw/packer.json.tmp \
+          && mv -vf packer/raw/packer.json.tmp packer/raw/packer.json.tmpl
+
+      - name: Build RAW CAPI Image
+        working-directory: image-builder/images/capi
+        shell: bash
+        run: |
+          PACKER_LOG=0 PACKER_VAR_FILES=packer/raw/overwrite-kubernetes.json make build-raw-${{ env.OS_IMAGE }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install oras utility
+        uses: oras-project/setup-oras@v1
+
+      - name: Push image to registry
+        shell: bash
+        run: |
+          oras version
+
+          IMAGE_FILE=$(find image-builder/images/capi/output -maxdepth 1 -name "*.gz" -type f -print -quit)
+
+          oras push ${REGISTRY}/${{ github.repository }}/${{ env.OS_IMAGE }}:${KUBERNETES_SEM_VERSION}.gz \
+            --artifact-type application/vnd.acme.rocket.config \
+            "$IMAGE_FILE"
