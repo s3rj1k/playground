@@ -31,17 +31,17 @@ mkdir -vp ~/output/
 echo -e "\n* Setting up environment variables..."
 export CAPT_VERSION=v0.6.2
 export CHART_VERSION=0.6.2
-export KUBE_VERSION=v1.29.4
+export KUBE_VERSION=v1.31.4
 export KUBEVIP_VERSION=0.8.7
 
 export CLUSTER_NAME=capt
 export NAMESPACE="tink"
 
-export OS_REGISTRY=ghcr.io/tinkerbell/cluster-api-provider-tinkerbell
+export OS_REGISTRY=ghcr.io/s3rj1k/k8s-playground
 export OS_DISTRO=ubuntu
 export VERSIONS_OS=20.04
 export OS_VERSION=$(echo $VERSIONS_OS | sed 's/\.//')
-export SSH_AUTH_KEY=
+export SSH_AUTH_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLrIiGjB4nPsyKzgzY21asVi/HKlveRnNY77vOhRhOA"
 
 export NODE1_MAC="02:7f:92:bd:2d:57"
 export NODE2_MAC="02:f3:eb:c1:aa:2b"
@@ -179,10 +179,17 @@ until clusterctl --v 1 generate cluster $CLUSTER_NAME \
 done
 
 echo -e "\n* Applying kustomization..."
-envsubst "$(printf '${%s} ' $(env | cut -d'=' -f1))" \
-	< templates/kustomization-netboot.tmpl \
-	| tee ~/output/kustomization.yaml \
-	&& kubectl kustomize ~/output -o ~/output/$CLUSTER_NAME.yaml
+if [ -z "$OS_VERSION" ]; then
+	sed 's|IMG_URL: $OS_REGISTRY/$OS_DISTRO-$OS_VERSION:$KUBE_VERSION.gz|IMG_URL: $OS_REGISTRY/$OS_DISTRO:$KUBE_VERSION.gz|g' templates/kustomization-netboot.tmpl \
+		| envsubst "$(printf '${%s} ' $(env | cut -d'=' -f1))" \
+		| tee ~/output/kustomization.yaml \
+		&& kubectl kustomize ~/output -o ~/output/$CLUSTER_NAME.yaml
+else
+	envsubst "$(printf '${%s} ' $(env | cut -d'=' -f1))" \
+		< templates/kustomization-netboot.tmpl \
+		| tee ~/output/kustomization.yaml \
+		&& kubectl kustomize ~/output -o ~/output/$CLUSTER_NAME.yaml
+fi
 
 echo -e "\n* Applying cluster configuration..."
 until kubectl apply -f ~/output/$CLUSTER_NAME.yaml --wait 2> /dev/null; do
