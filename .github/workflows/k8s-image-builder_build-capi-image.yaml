@@ -9,7 +9,7 @@ on:
         type: choice
         options:
           - ubuntu-2004
-          - flatcar
+          - ubuntu-2204
       kubernetes_series:
         description: "Kubernetes Series"
         required: true
@@ -67,7 +67,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_BUILDER_VERSION: v0.1.40
+  IMAGE_BUILDER_VERSION: v0.1.41
   OS_IMAGE: ${{ github.event.inputs.os_image }}
   # https://github.com/osism/k8s-capi-images/blob/main/extra_vars_131.json
   KUBERNETES_SERIES: v${{ github.event.inputs.kubernetes_series }}
@@ -125,7 +125,7 @@ jobs:
         shell: bash
         run: |
           make deps-raw
-          packer plugins install github.com/hashicorp/qemu
+          .local/bin/packer plugins install github.com/hashicorp/qemu
 
       # https://image-builder.sigs.k8s.io/capi/capi
       - name: Create Kubernetes configuration
@@ -141,23 +141,6 @@ jobs:
             "kubernetes_rpm_version": "${KUBERNETES_RPM_VERSION}"
           }
           EOF
-
-      # https://github.com/kubernetes-sigs/image-builder/issues/1075
-      # https://github.com/kubernetes-sigs/image-builder/issues/1638
-      - name: Update Packer vars_inline configuration
-        working-directory: image-builder/images/capi
-        shell: bash
-        run: |
-          jq '
-            .provisioners |= map(
-              if .type == "goss" then
-                .vars_inline.OS_VERSION = "{{user `distro_version` | lower}}"
-              else
-                .
-              end
-            )
-          ' packer/raw/packer.json.tmpl | tee packer/raw/packer.json.tmp \
-          && mv -vf packer/raw/packer.json.tmp packer/raw/packer.json.tmpl
 
       - name: Build RAW CAPI Image
         working-directory: image-builder/images/capi
