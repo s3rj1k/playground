@@ -23,6 +23,7 @@ parameters:
   image_id:
     type: string
     description: "Image to use for the instances."
+    default: noble-server-cloudimg-amd64
     label: "Server Image"
 
   ssh_pub_key:
@@ -83,7 +84,7 @@ parameters:
   volume_size:
     type: number
     description: "Size of root volume in GB"
-    default: 80
+    default: 160
     label: "Volume Size"
 
 resources:
@@ -236,7 +237,7 @@ resources:
               verbosity: 4
               pull:
                 url: "https://github.com/s3rj1k/k8s-playground.git"
-                playbook_name: k0s/playbook.yml
+                playbook_name: k0s/ubuntu-playbook.yml
                 extra_vars: '{"registry_mirror": "%registry_mirror%"}'
 
             runcmd:
@@ -295,7 +296,7 @@ resources:
               # Run ansible playbook
               - |
                 ansible-pull -U "https://github.com/s3rj1k/k8s-playground.git" \
-                  k0s/playbook.yml -vvvv -e "registry_mirror='%registry_mirror%' worker_token='${TOKEN}'"
+                  k0s/ubuntu-playbook.yml -vvvv -e "registry_mirror='%registry_mirror%' worker_token='${TOKEN}'"
               # Remove worker token
               - rm -f /tmp/worker_token.json
               # Remove ansible package

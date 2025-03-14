@@ -1,10 +1,10 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: Apache-2.0
 
-# DEBUG: ansible-pull -U https://github.com/s3rj1k/k8s-playground.git k0s/playbook.yml
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/k8s-playground.git k0s/ubuntu-playbook.yml
 
 ---
-- name: Kubernetes (k0s) on AMD64
+- name: Kubernetes (k0s) on Ubuntu AMD64
   hosts: localhost
   connection: local
   become: true
