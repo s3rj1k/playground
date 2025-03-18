@@ -495,6 +495,8 @@
             mode: '0755'
 
         - name: Generate k0s configuration
+          # FeatureGates:
+          #  - https://kubernetes.io/docs/tasks/configure-pod-container/image-volumes/
           shell: |
             if [ ! -f /root/k0s.yaml ]; then
               {% if registry_mirror | default("") | length > 0 %}
@@ -503,6 +505,12 @@
                 .spec.images.repository = "{{ registry_mirror }}" |
                 .spec.telemetry.enabled = false |
                 .spec.extensions.helm.concurrencyLevel = 3 |
+                .spec.featureGates = [
+                  {
+                    "name": "ImageVolume",
+                    "enabled": true
+                  }
+                ] |
                 .spec.api.sans |= [
                   .[] |
                   select(
@@ -516,6 +524,12 @@
                 del(.spec.konnectivity) |
                 .spec.telemetry.enabled = false |
                 .spec.extensions.helm.concurrencyLevel = 3 |
+                .spec.featureGates = [
+                  {
+                    "name": "ImageVolume",
+                    "enabled": true
+                  }
+                ] |
                 .spec.api.sans |= [
                   .[] |
                   select(
