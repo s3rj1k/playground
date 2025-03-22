@@ -84,7 +84,6 @@ parameters:
   volume_size:
     type: number
     description: "Size of root volume in GB"
-    default: 160
     label: "Volume Size"
 
 resources:
@@ -209,6 +208,16 @@ resources:
         get_resource: controller_wait_handle
       timeout: 1800
 
+  worker_node_1_wait_handle:
+    type: 'OS::Heat::WaitConditionHandle'
+
+  worker_node_1_wait_condition:
+    type: 'OS::Heat::WaitCondition'
+    properties:
+      handle:
+        get_resource: worker_node_1_wait_handle
+      timeout: 1800
+
   controller_user_data:
     type: 'OS::Heat::Value'
     properties:
@@ -247,12 +256,12 @@ resources:
                   echo "Waiting for k0s to be ready..."
                   sleep 10
                 done
+              # Remove ansible package
+              - apt-get remove -y --autoremove --purge ansible-core || true
               # Generate worker token and notify wait condition with the token
               - |
                 WORKER_TOKEN=$(k0s token create --role=worker)
                 %wc_notify% --data-binary "{\"status\": \"SUCCESS\", \"data\": \"$WORKER_TOKEN\"}"
-              # Remove ansible package
-              - apt-get remove -y --autoremove --purge ansible-core || true
           params:
             '%ssh_keys%':
               get_param: ssh_pub_key
@@ -290,7 +299,7 @@ resources:
 
             runcmd:
               # Install ansible package
-              - apt-get update && apt-get install -y ansible-core || true
+              - apt-get update && apt-get install -y ansible-core git || true
               # Get worker token
               - TOKEN=$(cat /tmp/worker_token.json | tr -d ' \n\t\r' | awk -F'"' '/"1":/ {print $4}')
               # Run ansible playbook
@@ -301,6 +310,9 @@ resources:
               - rm -f /tmp/worker_token.json
               # Remove ansible package
               - apt-get remove -y --autoremove --purge ansible-core || true
+              # Notify wait condition that worker setup is complete
+              - |
+                %wc_notify% --data-binary '{"status": "SUCCESS", "data": "Worker node #1 setup complete"}'
           params:
             '%ssh_keys%':
               get_param: ssh_pub_key
@@ -310,6 +322,10 @@ resources:
               get_attr:
                 - controller_wait_condition
                 - data
+            '%wc_notify%':
+              get_attr:
+                - worker_node_1_wait_handle
+                - curl_cli
 
   controller:
     type: 'OS::Nova::Server'
