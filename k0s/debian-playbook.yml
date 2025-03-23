@@ -19,11 +19,6 @@
   pre_tasks:
     - name: Check if system is supported
       block:
-        - name: Check if user is root
-          fail:
-            msg: "This playbook must be run as root"
-          when: ansible_user_id != "root"
-
         - name: Check if distribution is Debian
           fail:
             msg: "This playbook only supports Debian distributions"
@@ -40,7 +35,6 @@
           when:
             - ansible_distribution == "Debian"
             - ansible_architecture == "x86_64"
-            - ansible_user_id == "root"
 
     - name: Wait for system to be ready
       wait_for:
@@ -408,11 +402,10 @@
               # Disable telemetry
               config['spec']['telemetry']['enabled'] = False
 
-              # Set Helm concurrency level
-              config['spec']['extensions']['helm']['concurrencyLevel'] = 3
-
-              # Set feature gates
-              config['spec']['featureGates'] = [{'name': 'ImageVolume', 'enabled': True}]
+              # Set network provider to calico
+              if 'network' not in config['spec']:
+                  config['spec']['network'] = {}
+              config['spec']['network']['provider'] = 'calico'
 
               # Filter all IPv6 addresses
               if 'api' in config['spec'] and 'sans' in config['spec']['api']:

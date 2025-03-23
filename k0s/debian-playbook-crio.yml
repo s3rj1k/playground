@@ -20,11 +20,6 @@
   pre_tasks:
     - name: Check if system is supported
       block:
-        - name: Check if user is root
-          fail:
-            msg: "This playbook must be run as root"
-          when: ansible_user_id != "root"
-
         - name: Check if distribution is Debian
           fail:
             msg: "This playbook only supports Debian distributions"
@@ -41,7 +36,6 @@
           when:
             - ansible_distribution == "Debian"
             - ansible_architecture == "x86_64"
-            - ansible_user_id == "root"
 
     - name: Wait for system to be ready
       wait_for:
@@ -626,8 +620,10 @@
               # Disable telemetry
               config['spec']['telemetry']['enabled'] = False
 
-              # Set Helm concurrency level
-              config['spec']['extensions']['helm']['concurrencyLevel'] = 3
+              # Set network provider to calico
+              if 'network' not in config['spec']:
+                  config['spec']['network'] = {}
+              config['spec']['network']['provider'] = 'calico'
 
               # Set feature gates
               config['spec']['featureGates'] = [{'name': 'ImageVolume', 'enabled': True}]
@@ -696,7 +692,7 @@
         - name: Install k0s as a Controller
           shell: |
             if [ ! -f /etc/systemd/system/k0scontroller.service ]; then
-              k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --disable-components konnectivity-server --cri-socket=remote:unix:///var/run/crio/crio.sock --verbose
+              k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --disable-components konnectivity-server --verbose
             fi
           args:
             executable: /bin/bash
