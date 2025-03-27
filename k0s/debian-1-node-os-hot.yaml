@@ -1,6 +1,6 @@
 heat_template_version: 2021-04-16
 
-description: Template for Ubuntu VM for K0S (2 nodes - 1 controller and 1 workers)
+description: Template for Debian VM for K0S (1 node controller/worker)
 
 parameters:
   prefix:
@@ -23,7 +23,7 @@ parameters:
   image_id:
     type: string
     description: "Image to use for the instances."
-    default: noble-server-cloudimg-amd64
+    default: debian-12-genericcloud-amd64-20250316-2053
     label: "Server Image"
 
   ssh_pub_key:
@@ -64,12 +64,6 @@ parameters:
     default: "10.42.71.101"
     label: "Controller IP"
 
-  worker_node_1_ip:
-    type: string
-    description: "IP address for first worker node"
-    default: "10.42.71.102"
-    label: "Worker Node 1 IP"
-
   availability_zone:
     type: string
     description: "Availability zone for instances"
@@ -81,20 +75,10 @@ parameters:
     description: "Flavor for controller instance"
     label: "Controller Instance Flavor"
 
-  worker_flavor:
-    type: string
-    description: "Flavor for worker instances"
-    label: "Worker Instance Flavor"
-
   controller_volume_size:
     type: number
     description: "Size of root volume for controller node in GB"
     label: "Controller Volume Size"
-
-  worker_volume_size:
-    type: number
-    description: "Size of root volume for worker nodes in GB"
-    label: "Worker Volume Size"
 
 resources:
   network:
@@ -173,25 +157,6 @@ resources:
           ip_address:
             get_param: controller_ip
 
-  port_worker_node_1:
-    type: 'OS::Neutron::Port'
-    properties:
-      name:
-        str_replace:
-          template: $prefix-k0s-port-worker-node-1
-          params:
-            $prefix:
-              get_param: prefix
-      network:
-        get_resource: network
-      admin_state_up: true
-      port_security_enabled: false
-      fixed_ips:
-        - subnet:
-            get_resource: subnet
-          ip_address:
-            get_param: worker_node_1_ip
-
   floating_ip_controller:
     type: 'OS::Neutron::FloatingIP'
     properties:
@@ -199,14 +164,6 @@ resources:
         get_param: external_network
       port_id:
         get_resource: port_controller
-
-  floating_ip_worker_node_1:
-    type: 'OS::Neutron::FloatingIP'
-    properties:
-      floating_network:
-        get_param: external_network
-      port_id:
-        get_resource: port_worker_node_1
 
   controller_wait_handle:
     type: 'OS::Heat::WaitConditionHandle'
@@ -216,16 +173,6 @@ resources:
     properties:
       handle:
         get_resource: controller_wait_handle
-      timeout: 1800
-
-  worker_node_1_wait_handle:
-    type: 'OS::Heat::WaitConditionHandle'
-
-  worker_node_1_wait_condition:
-    type: 'OS::Heat::WaitCondition'
-    properties:
-      handle:
-        get_resource: worker_node_1_wait_handle
       timeout: 1800
 
   controller_user_data:
@@ -248,15 +195,13 @@ resources:
                 plain_text_passwd: root
                 ssh_authorized_keys: %ssh_keys%
 
-            # https://cloudinit.readthedocs.io/en/latest/reference/modules.html#ansible
-
             runcmd:
               # Install ansible package
               - apt-get update && apt-get install -y ansible-core git || true
               # Run ansible playbook
               - |
                 ansible-pull -U "https://github.com/s3rj1k/k8s-playground.git" \
-                  k0s/ubuntu-playbook.yml \
+                  k0s/debian-playbook.yml \
                   -vvvv \
                   -e "registry_mirror='%registry_mirror%' \
                       metallb_ip_range_start='%metallb_ip_range_start%' \
@@ -285,64 +230,6 @@ resources:
             '%wc_notify%':
               get_attr:
                 - controller_wait_handle
-                - curl_cli
-
-  worker_node_1_user_data:
-    type: 'OS::Heat::Value'
-    properties:
-      value:
-        str_replace:
-          template: |
-            #cloud-config
-
-            # https://cloudinit.readthedocs.io/en/24.1/reference/examples.html
-            # Logs are in:
-            #  - /var/log/cloud-init.log
-            #  - /var/log/cloud-init-output.log
-
-            users:
-              - name: root
-                shell: /bin/bash
-                lock_passwd: false
-                plain_text_passwd: root
-                ssh_authorized_keys: %ssh_keys%
-
-            write_files:
-              - path: /tmp/worker_token.json
-                content: '%worker_token%'
-                permissions: '0600'
-
-            runcmd:
-              # Install ansible package
-              - apt-get update && apt-get install -y ansible-core git || true
-              # Get worker token
-              - TOKEN=$(cat /tmp/worker_token.json | tr -d ' \n\t\r' | awk -F'"' '/"1":/ {print $4}')
-              # Run ansible playbook
-              - |
-                ansible-pull -U "https://github.com/s3rj1k/k8s-playground.git" \
-                  k0s/ubuntu-playbook.yml \
-                  -vvvv \
-                  -e "registry_mirror='%registry_mirror%' \
-                      worker_token='${TOKEN}'"
-              # Remove worker token
-              - rm -f /tmp/worker_token.json
-              # Remove ansible package
-              - apt-get remove -y --autoremove --purge ansible-core || true
-              # Notify wait condition that worker setup is complete
-              - |
-                %wc_notify% --data-binary '{"status": "SUCCESS", "data": "Worker node #1 setup complete"}'
-          params:
-            '%ssh_keys%':
-              get_param: ssh_pub_key
-            '%registry_mirror%':
-              get_param: registry_mirror
-            '%worker_token%':
-              get_attr:
-                - controller_wait_condition
-                - data
-            '%wc_notify%':
-              get_attr:
-                - worker_node_1_wait_handle
                 - curl_cli
 
   controller:
@@ -375,37 +262,6 @@ resources:
           - controller_user_data
           - value
 
-  worker_node_1:
-    type: 'OS::Nova::Server'
-    depends_on: controller_wait_condition
-    properties:
-      name:
-        str_replace:
-          template: '%prefix%-k0s-worker-node-1'
-          params:
-            '%prefix%':
-              get_param: prefix
-      availability_zone:
-        get_param: availability_zone
-      flavor:
-        get_param: worker_flavor
-      config_drive: true
-      block_device_mapping_v2:
-        - image_id:
-            get_param: image_id
-          delete_on_termination: true
-          boot_index: 0
-          volume_size:
-            get_param: worker_volume_size
-      networks:
-        - port:
-            get_resource: port_worker_node_1
-      user_data_format: RAW
-      user_data:
-        get_attr:
-          - worker_node_1_user_data
-          - value
-
 outputs:
   controller_floating_ip:
     description: Floating IP address for Controller Node
@@ -414,25 +270,11 @@ outputs:
         - floating_ip_controller
         - floating_ip_address
 
-  worker_node_1_floating_ip:
-    description: Floating IP address for Worker Node 1
-    value:
-      get_attr:
-        - floating_ip_worker_node_1
-        - floating_ip_address
-
   controller_user_data:
     description: Rendered Controller user-data
     value:
       get_attr:
         - controller_user_data
-        - value
-
-  worker_node_1_user_data:
-    description: Rendered Worker Node 1 user-data
-    value:
-      get_attr:
-        - worker_node_1_user_data
         - value
 
   worker_token:

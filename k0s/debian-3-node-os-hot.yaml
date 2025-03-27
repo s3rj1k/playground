@@ -297,7 +297,11 @@ resources:
               # Run ansible playbook
               - |
                 ansible-pull -U "https://github.com/s3rj1k/k8s-playground.git" \
-                  k0s/debian-playbook.yml -vvvv -e "registry_mirror='%registry_mirror%'"
+                  k0s/debian-playbook.yml \
+                  -vvvv \
+                  -e "registry_mirror='%registry_mirror%' \
+                      metallb_ip_range_start='%metallb_ip_range_start%' \
+                      metallb_ip_range_end='%metallb_ip_range_end%'"
               # Wait for k0s to be ready
               - |
                 until k0s status 2>/dev/null; do
@@ -315,6 +319,10 @@ resources:
               get_param: ssh_pub_key
             '%registry_mirror%':
               get_param: registry_mirror
+            '%metallb_ip_range_start%':
+              get_param: allocation_pool_start
+            '%metallb_ip_range_end%':
+              get_param: allocation_pool_end
             '%wc_notify%':
               get_attr:
                 - controller_wait_handle
@@ -353,7 +361,10 @@ resources:
               # Run ansible playbook
               - |
                 ansible-pull -U "https://github.com/s3rj1k/k8s-playground.git" \
-                  k0s/debian-playbook.yml -vvvv -e "registry_mirror='%registry_mirror%' worker_token='${TOKEN}'"
+                  k0s/debian-playbook.yml \
+                  -vvvv \
+                  -e "registry_mirror='%registry_mirror%' \
+                      worker_token='${TOKEN}'"
               # Remove worker token
               - rm -f /tmp/worker_token.json
               # Remove ansible package
@@ -408,7 +419,10 @@ resources:
               # Run ansible playbook
               - |
                 ansible-pull -U "https://github.com/s3rj1k/k8s-playground.git" \
-                  k0s/debian-playbook.yml -vvvv -e "registry_mirror='%registry_mirror%' worker_token='${TOKEN}'"
+                  k0s/debian-playbook.yml \
+                  -vvvv \
+                  -e "registry_mirror='%registry_mirror%' \
+                      worker_token='${TOKEN}'"
               # Remove worker token
               - rm -f /tmp/worker_token.json
               # Remove ansible package

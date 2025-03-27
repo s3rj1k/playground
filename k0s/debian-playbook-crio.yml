@@ -17,6 +17,8 @@
     clusterctl_version: "v1.9.6"
     crio_version: "v1.32.2"
     k0s_version: "v1.32.2+k0s.0"
+    metallb_ip_range_start: ""
+    metallb_ip_range_end: ""
 
   pre_tasks:
     - name: Check if system is supported
@@ -689,13 +691,13 @@
               metallb_chart = {
                   'name': 'metallb',
                   'chartname': 'metallb/metallb',
-                  'namespace': 'metallb'
+                  'namespace': 'metallb-system'
               }
 
               # Check if the chart already exists
               chart_exists = False
               for chart in config['spec']['extensions']['helm']['charts']:
-                  if chart.get('name') == 'metallb' and chart.get('namespace') == 'metallb':
+                  if chart.get('name') == 'metallb' and chart.get('namespace') == 'metallb-system':
                       chart_exists = True
                       break
 
@@ -798,6 +800,42 @@
             src: /usr/local/bin/k0s
             dest: /usr/local/bin/kubectl
             state: link
+
+    - name: Configure MetalLB
+      block:
+        - name: Create MetalLB IPAddressPool and L2Advertisement template
+          copy:
+            dest: /root/metallb-config.yaml
+            content: |
+              apiVersion: metallb.io/v1beta1
+              kind: IPAddressPool
+              metadata:
+                name: k0s-pool
+                namespace: metallb-system
+              spec:
+                addresses:
+                  - {{ metallb_ip_range_start }}-{{ metallb_ip_range_end }}
+              ---
+              apiVersion: metallb.io/v1beta1
+              kind: L2Advertisement
+              metadata:
+                name: k0s-l2adv
+                namespace: metallb-system
+            mode: '0644'
+
+        - name: Apply MetalLB configuration
+          shell: |
+            k0s kubectl apply -f /root/metallb-config.yaml
+          args:
+            executable: /bin/bash
+          register: apply_result
+          retries: 15
+          delay: 10
+          until: apply_result.rc == 0
+      when:
+        - worker_token | default("") | length == 0
+        - metallb_ip_range_start | default("") | length > 0
+        - metallb_ip_range_end | default("") | length > 0
 
     - name: Mask unnecessary systemd units
       systemd:
