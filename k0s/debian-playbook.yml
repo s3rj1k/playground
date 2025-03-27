@@ -454,16 +454,14 @@
                   'name': 'metallb',
                   'url': 'https://metallb.github.io/metallb'
               }
+              config['spec']['extensions']['helm']['repositories'].append(metallb_repo)
 
-              # Check if the repository already exists
-              repo_exists = False
-              for repo in config['spec']['extensions']['helm']['repositories']:
-                  if repo.get('name') == 'metallb':
-                      repo_exists = True
-                      break
-
-              if not repo_exists:
-                  config['spec']['extensions']['helm']['repositories'].append(metallb_repo)
+              # Add containeroo repository
+              containeroo_repo = {
+                  'name': 'containeroo',
+                  'url': 'https://charts.containeroo.ch'
+              }
+              config['spec']['extensions']['helm']['repositories'].append(containeroo_repo)
 
               # Add MetalLB chart
               metallb_chart = {
@@ -471,16 +469,20 @@
                   'chartname': 'metallb/metallb',
                   'namespace': 'metallb-system'
               }
+              config['spec']['extensions']['helm']['charts'].append(metallb_chart)
 
-              # Check if the chart already exists
-              chart_exists = False
-              for chart in config['spec']['extensions']['helm']['charts']:
-                  if chart.get('name') == 'metallb' and chart.get('namespace') == 'metallb-system':
-                      chart_exists = True
-                      break
-
-              if not chart_exists:
-                  config['spec']['extensions']['helm']['charts'].append(metallb_chart)
+              # Add local-path-storage chart
+              lpstorage_chart = {
+                  'name': 'local-path-storage',
+                  'chartname': 'containeroo/local-path-provisioner',
+                  'namespace': 'local-path-storage',
+                  'values': yaml.dump({
+                      'storageClass': {
+                          'defaultClass': True
+                      }
+                  })
+              }
+              config['spec']['extensions']['helm']['charts'].append(lpstorage_chart)
 
               # Write the modified config to file
               with open(k0s_config_path, 'w') as f:
