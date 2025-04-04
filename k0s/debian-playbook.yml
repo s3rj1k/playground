@@ -11,13 +11,14 @@
   gather_facts: true
   ignore_errors: false
   vars:
-    registry_mirror: ""
-    worker_token: ""
-    helm_version: "v3.17.2"
-    clusterctl_version: "v1.9.6"
-    k0s_version: "v1.32.2+k0s.0"
-    metallb_ip_range_start: ""
-    metallb_ip_range_end: ""
+    # curl -s "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest" | jq -r ".tag_name"
+    CLUSTERCTL_VERSION: "v1.9.6"
+    # curl -s "https://api.github.com/repos/k0sproject/k0s/releases/latest" | jq -r ".tag_name"
+    K0S_VERSION: "v1.32.3+k0s.0"
+    LB_IP_RANGE_START: ""
+    LB_IP_RANGE_STOP: ""
+    REGISTRY_MIRROR: ""
+    WORKER_DATA: ""
 
   pre_tasks:
     - name: Check if system is supported
@@ -81,15 +82,45 @@
 
     - name: Consolidated package management
       block:
-        - name: Install all required packages
+        - name: Install minimum packages required for setting up repositories
           apt:
             name:
-              # Base dependencies
               - apt-transport-https
               - ca-certificates
               - curl
-              - gettext-base
               - gnupg
+            state: present
+            update_cache: yes
+          when: system_upgraded is success
+
+        - name: Create apt keyrings directory
+          file:
+            path: /etc/apt/keyrings
+            state: directory
+            mode: '0755'
+
+        - name: Add Helm repository key
+          shell: |
+            curl -fsSL https://baltocdn.com/helm/signing.asc | \
+            gpg --dearmor -o /etc/apt/keyrings/helm.gpg
+          args:
+            creates: /etc/apt/keyrings/helm.gpg
+
+        - name: Add Helm repository
+          ansible.builtin.copy:
+            dest: /etc/apt/sources.list.d/helm.list
+            content: "deb [signed-by=/etc/apt/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main"
+            mode: '0644'
+
+        - name: Update apt cache after adding repositories
+          apt:
+            update_cache: yes
+
+        - name: Install remaining required packages
+          apt:
+            name:
+              # Base
+              - gettext-base
               - tar
               # Locale
               - locales
@@ -115,16 +146,28 @@
               - python3-yaml
               # Containers
               - buildah
+              # Kubernetes
+              - helm
               # Text and JSON processing
               - gawk
               - jq
               - nano
               - sed
+              - yq
               # TUI
               - mc
             state: present
             update_cache: yes
           when: system_upgraded is success
+
+    - name: Install clusterctl
+      block:
+        - name: Download clusterctl binary
+          get_url:
+            url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ CLUSTERCTL_VERSION }}/clusterctl-linux-amd64"
+            dest: /usr/local/bin/clusterctl
+            mode: '0755'
+      when: CLUSTERCTL_VERSION is defined and CLUSTERCTL_VERSION | trim | length > 0
 
     - name: Configure SSH client
       copy:
@@ -177,45 +220,6 @@
             state: restarted
           when: multipath_conf is changed
 
-    - name: Install Helm
-      block:
-        - name: Download Helm {{ helm_version }}
-          get_url:
-            url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
-            dest: /tmp/helm.tar.gz
-            mode: '0644'
-
-        - name: Extract Helm binary
-          unarchive:
-            src: /tmp/helm.tar.gz
-            dest: /tmp
-            remote_src: yes
-
-        - name: Install Helm binary
-          copy:
-            src: /tmp/linux-amd64/helm
-            dest: /usr/local/bin/helm
-            mode: '0755'
-            remote_src: yes
-
-        - name: Remove temporary files
-          file:
-            path: "{{ item }}"
-            state: absent
-          loop:
-            - /tmp/helm.tar.gz
-            - /tmp/linux-amd64
-      when: helm_version is defined and helm_version | length > 0
-
-    - name: Install clusterctl
-      block:
-        - name: Download clusterctl binary
-          get_url:
-            url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ clusterctl_version }}/clusterctl-linux-amd64"
-            dest: /usr/local/bin/clusterctl
-            mode: '0755'
-      when: clusterctl_version is defined and clusterctl_version | length > 0
-
     - name: Configure kernel modules
       block:
         - name: Ensure required kernel modules are loaded
@@ -263,8 +267,12 @@
             swapoff -a
           when: ansible_memory_mb.swap.total != 0
 
-        - name: Edit fstab file to disable swap
-          shell: sed -ri '/\sswap\s/s/^#?/#/' /etc/fstab
+        - name: Disable swap entries in fstab
+          lineinfile:
+            path: /etc/fstab
+            regexp: '^([^#].*\s+swap\s+.*)$'
+            line: '#\1'
+            backrefs: yes
           when: ansible_memory_mb.swap.total != 0
 
     - name: Configure GRUB
@@ -367,7 +375,7 @@
       block:
         - name: Download k0s binary
           get_url:
-            url: "https://github.com/k0sproject/k0s/releases/download/{{ k0s_version }}/k0s-{{ k0s_version }}-amd64"
+            url: "https://github.com/k0sproject/k0s/releases/download/{{ K0S_VERSION }}/k0s-{{ K0S_VERSION }}-amd64"
             dest: /usr/local/bin/k0s
             mode: '0755'
 
@@ -491,7 +499,7 @@
 
         - name: Generate k0s configuration
           environment:
-            REGISTRY_MIRROR: "{{ registry_mirror | default('') }}"
+            REGISTRY_MIRROR: "{{ REGISTRY_MIRROR | default('') }}"
           shell: /root/k0s.py
           changed_when: false
 
@@ -500,14 +508,14 @@
             path: /etc/systemd/system/k0scontroller.service.d
             state: directory
             mode: '0755'
-          when: worker_token | default("") | length == 0
+          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Create systemd override directory for k0sworker
           file:
             path: /etc/systemd/system/k0sworker.service.d
             state: directory
             mode: '0755'
-          when: worker_token | default("") | length > 0
+          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Configure k0scontroller service override
           copy:
@@ -517,7 +525,7 @@
               LimitNOFILE=1048576
               OOMScoreAdjust=-999
             mode: '0644'
-          when: worker_token | default("") | length == 0
+          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Configure k0sworker service override
           copy:
@@ -527,7 +535,7 @@
               LimitNOFILE=1048576
               OOMScoreAdjust=-999
             mode: '0644'
-          when: worker_token | default("") | length > 0
+          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Install k0s as a Controller
           shell: |
@@ -536,14 +544,14 @@
             fi
           args:
             executable: /bin/bash
-          when: worker_token | default("") | length == 0
+          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Create Worker token file
           copy:
-            content: "{{ worker_token }}"
+            content: "{{ WORKER_DATA }}"
             dest: /root/k0s-token
             mode: '0600'
-          when: worker_token | default("") | length > 0
+          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Install k0s as a Worker with token
           shell: |
@@ -552,21 +560,21 @@
             fi
           args:
             executable: /bin/bash
-          when: worker_token | default("") | length > 0
+          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Start k0s Controller service
           systemd:
             name: k0scontroller.service
             state: started
             enabled: yes
-          when: worker_token | default("") | length == 0
+          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Start k0s Worker service
           systemd:
             name: k0sworker.service
             state: started
             enabled: yes
-          when: worker_token | default("") | length > 0
+          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Create k0s shell configuration file
           copy:
@@ -574,7 +582,7 @@
             content: |
               export KUBECONFIG=/var/lib/k0s/pki/admin.conf
             mode: '0644'
-          when: worker_token | default("") | length == 0
+          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Create kubectl symlink
           file:
@@ -582,25 +590,25 @@
             dest: /usr/local/bin/kubectl
             state: link
 
-    - name: Configure MetalLB
+    - name: Configure LB
       block:
-        - name: Create MetalLB IPAddressPool and L2Advertisement template
+        - name: Create MetalLB IPAddressPool and L2Advertisement
           copy:
             dest: /root/metallb-config.yaml
             content: |
               apiVersion: metallb.io/v1beta1
               kind: IPAddressPool
               metadata:
-                name: k0s-pool
+                name: default-pool
                 namespace: metallb-system
               spec:
                 addresses:
-                  - {{ metallb_ip_range_start }}-{{ metallb_ip_range_end }}
+                  - {{ LB_IP_RANGE_START }}-{{ LB_IP_RANGE_STOP }}
               ---
               apiVersion: metallb.io/v1beta1
               kind: L2Advertisement
               metadata:
-                name: k0s-l2adv
+                name: default-l2adv
                 namespace: metallb-system
             mode: '0644'
 
@@ -610,13 +618,13 @@
           args:
             executable: /bin/bash
           register: apply_result
-          retries: 15
-          delay: 10
           until: apply_result.rc == 0
+          retries: 5
+          delay: 30
       when:
-        - worker_token | default("") | length == 0
-        - metallb_ip_range_start | default("") | length > 0
-        - metallb_ip_range_end | default("") | length > 0
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+        - LB_IP_RANGE_START | default("") | length > 0
+        - LB_IP_RANGE_STOP | default("") | length > 0
 
     - name: Mask unnecessary systemd units
       systemd:
@@ -624,6 +632,14 @@
         masked: yes
       loop:
         - apparmor.service
+        - auditd.service
+        - chronyd.service
+        - connman.service
+        - display-manager.service
+        - NetworkManager.service
+        - plymouth-quit-wait.service
+        - plymouth-start.service
+        - snapd.seeded.service
 
     - name: Handle system reboot check
       block:

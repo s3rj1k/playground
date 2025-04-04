@@ -27,7 +27,7 @@
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
     REGISTRY_MIRROR: ""
-    WORKER_JOIN_COMMAND: ""
+    WORKER_DATA: ""
 
   pre_tasks:
     - name: Check if system is supported
@@ -162,6 +162,7 @@
         - name: Install remaining required packages
           apt:
             name:
+              # Base
               - gettext-base
               - tar
               # Locale
@@ -202,6 +203,15 @@
             state: present
             update_cache: yes
           when: system_upgraded is success
+
+    - name: Install clusterctl
+      block:
+        - name: Download clusterctl binary
+          get_url:
+            url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ CLUSTERCTL_VERSION }}/clusterctl-linux-amd64"
+            dest: /usr/local/bin/clusterctl
+            mode: '0755'
+      when: CLUSTERCTL_VERSION is defined and CLUSTERCTL_VERSION | trim | length > 0
 
     - name: Configure SSH client
       copy:
@@ -440,15 +450,6 @@
           when: REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0
           notify: restart crio
 
-    - name: Install clusterctl
-      block:
-        - name: Download clusterctl binary
-          get_url:
-            url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ CLUSTERCTL_VERSION }}/clusterctl-linux-amd64"
-            dest: /usr/local/bin/clusterctl
-            mode: '0755'
-      when: CLUSTERCTL_VERSION is defined and CLUSTERCTL_VERSION | trim | length > 0
-
     - name: Initialize Kubernetes Control Plane
       block:
           # FeatureGates:
@@ -540,7 +541,7 @@
           failed_when: false
           when: taint_check.stdout | length > 0
 
-      when: WORKER_JOIN_COMMAND is not defined or WORKER_JOIN_COMMAND | trim | length == 0
+      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     # Install Cilium as CNI (https://docs.cilium.io/en/stable/gettingstarted/k8s-install-default/)
     - name: Install Cilium CNI
@@ -590,7 +591,7 @@
           until: cilium_wait.rc == 0
           retries: 5
           delay: 30
-      when: WORKER_JOIN_COMMAND is not defined or WORKER_JOIN_COMMAND | trim | length == 0
+      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     - name: Configure LB
       block:
@@ -617,7 +618,7 @@
           retries: 5
           delay: 30
       when:
-        - WORKER_JOIN_COMMAND is not defined or WORKER_JOIN_COMMAND | trim | length == 0
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
         - LB_IP_RANGE_START | default("") | length > 0
         - LB_IP_RANGE_STOP | default("") | length > 0
 
@@ -642,7 +643,7 @@
           retries: 5
           delay: 30
       when:
-        - WORKER_JOIN_COMMAND is not defined or WORKER_JOIN_COMMAND | trim | length == 0
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     - name: Initialize Kubernetes Worker Node
       block:
@@ -661,14 +662,14 @@
             daemon_reload: yes
 
         - name: Join the Kubernetes cluster as worker node
-          command: "{{ WORKER_JOIN_COMMAND }}"
+          command: "{{ WORKER_DATA }}"
           register: worker_join
           changed_when: true
           failed_when: worker_join.rc != 0
           until: worker_join is succeeded
           retries: 5
           delay: 30
-      when: WORKER_JOIN_COMMAND is defined and WORKER_JOIN_COMMAND | trim | length > 0
+      when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
     - name: Mask unnecessary systemd units
       systemd:

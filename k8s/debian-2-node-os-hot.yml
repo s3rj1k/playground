@@ -1,6 +1,6 @@
 heat_template_version: 2021-04-16
 
-description: Template for Ubuntu VM for K0S (2 nodes - 1 controller and 1 workers)
+description: Template for 2 node K8s Cluster
 
 parameters:
   prefix:
@@ -23,7 +23,7 @@ parameters:
   image_id:
     type: string
     description: "Image to use for the instances."
-    default: noble-server-cloudimg-amd64
+    default: debian-12-genericcloud-amd64-20250316-2053
     label: "Server Image"
 
   ssh_pub_key:
@@ -52,7 +52,7 @@ parameters:
     default: "10.42.71.10"
     label: "Allocation Pool Start"
 
-  allocation_pool_end:
+  allocation_pool_stop:
     type: string
     description: "End of IP allocation pool"
     default: "10.42.71.250"
@@ -102,7 +102,7 @@ resources:
     properties:
       name:
         str_replace:
-          template: $prefix-k0s-network
+          template: $prefix-k8s-network
           params:
             $prefix:
               get_param: prefix
@@ -116,7 +116,7 @@ resources:
     properties:
       name:
         str_replace:
-          template: $prefix-k0s-subnet
+          template: $prefix-k8s-subnet
           params:
             $prefix:
               get_param: prefix
@@ -130,14 +130,14 @@ resources:
         - start:
             get_param: allocation_pool_start
           end:
-            get_param: allocation_pool_end
+            get_param: allocation_pool_stop
 
   router:
     type: 'OS::Neutron::Router'
     properties:
       name:
         str_replace:
-          template: $prefix-k0s-router
+          template: $prefix-k8s-router
           params:
             $prefix:
               get_param: prefix
@@ -159,7 +159,7 @@ resources:
     properties:
       name:
         str_replace:
-          template: $prefix-k0s-port-controller
+          template: $prefix-k8s-port-controller
           params:
             $prefix:
               get_param: prefix
@@ -178,7 +178,7 @@ resources:
     properties:
       name:
         str_replace:
-          template: $prefix-k0s-port-worker-node-1
+          template: $prefix-k8s-port-worker-node-1
           params:
             $prefix:
               get_param: prefix
@@ -248,40 +248,36 @@ resources:
                 plain_text_passwd: root
                 ssh_authorized_keys: %ssh_keys%
 
-            # https://cloudinit.readthedocs.io/en/latest/reference/modules.html#ansible
-
             runcmd:
-              # Install ansible package
-              - apt-get update && apt-get install -y ansible-core git || true
-              # Run ansible playbook
               - |
+                apt-get update && apt-get install -y ansible-core git || true
+
                 ansible-pull -U "https://github.com/s3rj1k/k8s-playground.git" \
-                  k0s/ubuntu-playbook.yml \
+                  k8s/debian-playbook.yml \
                   -vvvv \
-                  -e "registry_mirror='%registry_mirror%' \
-                      metallb_ip_range_start='%metallb_ip_range_start%' \
-                      metallb_ip_range_end='%metallb_ip_range_end%'"
-              # Wait for k0s to be ready
-              - |
-                until k0s status 2>/dev/null; do
-                  echo "Waiting for k0s to be ready..."
-                  sleep 10
-                done
-              # Remove ansible package
-              - apt-get remove -y --autoremove --purge ansible-core || true
-              # Generate worker token and notify wait condition with the token
-              - |
-                WORKER_TOKEN=$(k0s token create --role=worker)
-                %wc_notify% --data-binary "{\"status\": \"SUCCESS\", \"data\": \"$WORKER_TOKEN\"}"
+                  -e "REGISTRY_MIRROR='%registry_mirror%' \
+                      LB_IP_RANGE_START='%lb_ip_range_start%' \
+                      LB_IP_RANGE_STOP='%lb_ip_range_stop%'"
+                ANSIBLE_RESULT=$?
+
+                apt-get remove -y --autoremove --purge ansible-core || true
+
+                if [ $ANSIBLE_RESULT -eq 0 ]; then
+                  WORKER_DATA=$(kubeadm token create --print-join-command)
+                  %wc_notify% --data-binary "{\"status\": \"SUCCESS\", \"data\": \"$WORKER_DATA\"}"
+                else
+                  %wc_notify% --data-binary "{\"status\": \"FAILURE\", \"reason\": \"Ansible playbook execution failed\"}"
+                  exit 1
+                fi
           params:
             '%ssh_keys%':
               get_param: ssh_pub_key
             '%registry_mirror%':
               get_param: registry_mirror
-            '%metallb_ip_range_start%':
+            '%lb_ip_range_start%':
               get_param: allocation_pool_start
-            '%metallb_ip_range_end%':
-              get_param: allocation_pool_end
+            '%lb_ip_range_stop%':
+              get_param: allocation_pool_stop
             '%wc_notify%':
               get_attr:
                 - controller_wait_handle
@@ -308,35 +304,38 @@ resources:
                 ssh_authorized_keys: %ssh_keys%
 
             write_files:
-              - path: /tmp/worker_token.json
-                content: '%worker_token%'
+              - path: /tmp/worker_data.json
+                content: '%worker_data%'
                 permissions: '0600'
 
             runcmd:
-              # Install ansible package
-              - apt-get update && apt-get install -y ansible-core git || true
-              # Get worker token
-              - TOKEN=$(cat /tmp/worker_token.json | tr -d ' \n\t\r' | awk -F'"' '/"1":/ {print $4}')
-              # Run ansible playbook
               - |
+                apt-get update && apt-get install -y ansible-core git jq || true
+
+                WORKER_DATA=$(cat /tmp/worker_data.json | jq -r '."1"')
+                rm -f /tmp/worker_data.json
+
                 ansible-pull -U "https://github.com/s3rj1k/k8s-playground.git" \
-                  k0s/ubuntu-playbook.yml \
+                  k8s/debian-playbook.yml \
                   -vvvv \
-                  -e "registry_mirror='%registry_mirror%' \
-                      worker_token='${TOKEN}'"
-              # Remove worker token
-              - rm -f /tmp/worker_token.json
-              # Remove ansible package
-              - apt-get remove -y --autoremove --purge ansible-core || true
-              # Notify wait condition that worker setup is complete
-              - |
-                %wc_notify% --data-binary '{"status": "SUCCESS", "data": "Worker node #1 setup complete"}'
+                  -e "REGISTRY_MIRROR='%registry_mirror%' \
+                      WORKER_DATA='${WORKER_DATA}'"
+                ANSIBLE_RESULT=$?
+
+                apt-get remove -y --autoremove --purge ansible-core || true
+
+                if [ $ANSIBLE_RESULT -eq 0 ]; then
+                  %wc_notify% --data-binary '{"status": "SUCCESS", "data": "Worker node #1 setup complete"}'
+                else
+                  %wc_notify% --data-binary '{"status": "FAILURE", "reason": "Worker node #1 setup failed"}'
+                  exit 1
+                fi
           params:
             '%ssh_keys%':
               get_param: ssh_pub_key
             '%registry_mirror%':
               get_param: registry_mirror
-            '%worker_token%':
+            '%worker_data%':
               get_attr:
                 - controller_wait_condition
                 - data
@@ -350,7 +349,7 @@ resources:
     properties:
       name:
         str_replace:
-          template: '%prefix%-k0s-controller'
+          template: '%prefix%-k8s-controller'
           params:
             '%prefix%':
               get_param: prefix
@@ -381,7 +380,7 @@ resources:
     properties:
       name:
         str_replace:
-          template: '%prefix%-k0s-worker-node-1'
+          template: '%prefix%-k8s-worker-node-1'
           params:
             '%prefix%':
               get_param: prefix
@@ -435,8 +434,8 @@ outputs:
         - worker_node_1_user_data
         - value
 
-  worker_token:
-    description: Worker token
+  worker_data:
+    description: Worker data
     value:
       get_attr:
         - controller_wait_condition
