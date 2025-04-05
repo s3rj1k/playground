@@ -1,5 +1,5 @@
 # Copyright 2025 s3rj1k
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/k8s-playground.git k0s/debian-playbook.yml
 
