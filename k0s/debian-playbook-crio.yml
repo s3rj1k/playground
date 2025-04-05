@@ -4,17 +4,16 @@
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/k8s-playground.git k0s/debian-playbook-crio.yml
 
 ---
-- name: Kubernetes (k0s) on Debian AMD64
+- name: Kubernetes (k0s) on Debian/Ubuntu AMD64
   hosts: localhost
   connection: local
   become: true
   gather_facts: true
   ignore_errors: false
   vars:
-    # curl -s "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest" | jq -r ".tag_name"
-    CLUSTERCTL_VERSION: "v1.9.6"
     # curl -s "https://api.github.com/repos/k0sproject/k0s/releases/latest" | jq -r ".tag_name"
     K0S_VERSION: "v1.32.3+k0s.0"
+    CRIO_VERSION: "v1.32"
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
     REGISTRY_MIRROR: ""
@@ -23,22 +22,19 @@
   pre_tasks:
     - name: Check if system is supported
       block:
-        - name: Check if distribution is Debian
+        - name: Check if distribution is Debian or Ubuntu
           fail:
-            msg: "This playbook only supports Debian distributions"
-          when: ansible_distribution != "Debian"
+            msg: "This playbook only supports Debian or Ubuntu distributions"
+          when: ansible_distribution not in ["Debian", "Ubuntu"]
 
         - name: Check if architecture is AMD64
           fail:
             msg: "This playbook only supports AMD64 architecture"
           when: ansible_architecture != "x86_64"
 
-        - name: Get Debian version
+        - name: Get OS version
           debug:
-            msg: "Running on Debian {{ ansible_distribution_version }} ({{ ansible_architecture }})"
-          when:
-            - ansible_distribution == "Debian"
-            - ansible_architecture == "x86_64"
+            msg: "Running on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
 
     - name: Wait for system to be ready
       wait_for:
@@ -47,14 +43,14 @@
       when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
 
   handlers:
-    - name: restart sshd
+    - name: Restart sshd
       systemd:
         name: ssh
         state: restarted
         daemon_reload: yes
       when: ansible_service_mgr == 'systemd'
 
-    - name: restart crio
+    - name: Restart crio
       systemd:
         name: crio
         state: restarted
@@ -62,6 +58,61 @@
       when: ansible_service_mgr == 'systemd'
 
   tasks:
+    - name: Clean up system packages and snap
+      block:
+        - name: Remove all snap packages
+          shell: |
+            snap list | awk '!/^Name|^core|^snapd|^lxd/ {print $1}' | xargs -r snap remove --purge
+            snap list | awk '/^lxd/ {print $1}' | xargs -r snap remove --purge
+            snap list | awk '/^core/ {print $1}' | xargs -r snap remove --purge
+            snap list | awk '/^snapd/ {print $1}' | xargs -r snap remove --purge
+            snap list | awk '!/^Name/ {print $1}' | xargs -r snap remove --purge
+          ignore_errors: yes
+          when: ansible_distribution == "Ubuntu"
+
+        - name: Remove system packages
+          apt:
+            name:
+              - apparmor
+              - byobu
+              - lxd
+              - lxd-agent-loader
+              - lxd-installer
+              - modemmanager
+              - plymouth
+              - snapd
+              - ufw
+            state: absent
+            purge: yes
+            autoremove: yes
+
+        - name: Remove snap directories
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /root/snap
+            - /run/snapd
+            - /snap
+            - /var/cache/snapd
+            - /var/snap
+
+        - name: Mask unnecessary systemd units
+          systemd:
+            name: "{{ item }}"
+            masked: yes
+          loop:
+            - apparmor.service
+            - firewalld.service
+            - lxd-installer.socket
+            - plymouth-quit-wait.service
+            - plymouth-quit.service
+            - plymouth-read-write.service
+            - plymouth-start.service
+            - snapd.mounts-pre.target
+            - snapd.seeded.service
+            - ufw.service
+
     - name: Remove system users and groups
       block:
         - name: Remove users
@@ -71,6 +122,8 @@
             remove: yes
           loop:
             - debian
+            - lxd
+            - ubuntu
           ignore_errors: yes
 
         - name: Remove groups
@@ -79,6 +132,8 @@
             state: absent
           loop:
             - debian
+            - lxd
+            - ubuntu
           ignore_errors: yes
 
     - name: Update and upgrade system packages
@@ -89,47 +144,51 @@
 
     - name: Consolidated package management
       block:
-        - name: Install minimum packages required for setting up repositories
-          apt:
-            name:
-              - apt-transport-https
-              - ca-certificates
-              - curl
-              - gnupg
-            state: present
-            update_cache: yes
-          when: system_upgraded is success
-
-        - name: Create apt keyrings directory
-          file:
+        - name: Create directory for apt keyrings
+          ansible.builtin.file:
             path: /etc/apt/keyrings
             state: directory
             mode: '0755'
 
-        - name: Add CRI-O repository key
-          shell: |
-            curl -fsSL https://download.opensuse.org/repositories/isv:/cri-o:/stable:/{{ CRIO_VERSION }}/deb/Release.key | \
-            gpg --dearmor -o /etc/apt/keyrings/cri-o-apt-keyring.gpg
-          args:
-            creates: /etc/apt/keyrings/cri-o-apt-keyring.gpg
+        # Note: `ansible.builtin.deb822_repository` requires Ansible 2.15+
 
-        - name: Add CRI-O repository
-          ansible.builtin.copy:
-            dest: /etc/apt/sources.list.d/cri-o.list
-            content: "deb [signed-by=/etc/apt/keyrings/cri-o-apt-keyring.gpg] https://download.opensuse.org/repositories/isv:/cri-o:/stable:/{{ CRIO_VERSION }}/deb/ /"
+        - name: Download CRI-O signing key
+          ansible.builtin.get_url:
+            url: "https://download.opensuse.org/repositories/isv:/cri-o:/stable:/{{ CRIO_VERSION }}/deb/Release.key"
+            dest: "/etc/apt/keyrings/crio.asc"
             mode: '0644'
 
-        - name: Add Helm repository key
-          shell: |
-            curl -fsSL https://baltocdn.com/helm/signing.asc | \
-            gpg --dearmor -o /etc/apt/keyrings/helm.gpg
-          args:
-            creates: /etc/apt/keyrings/helm.gpg
-
-        - name: Add Helm repository
+        - name: Create CRI-O repository file
           ansible.builtin.copy:
-            dest: /etc/apt/sources.list.d/helm.list
-            content: "deb [signed-by=/etc/apt/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main"
+            dest: "/etc/apt/sources.list.d/crio.sources"
+            content: |
+              X-Repolib-Name: crio
+              Types: deb
+              URIs: https://download.opensuse.org/repositories/isv:/cri-o:/stable:/{{ CRIO_VERSION }}/deb/
+              Signed-By: /etc/apt/keyrings/crio.asc
+              Suites: /
+              Architectures: amd64
+              Enabled: yes
+            mode: '0644'
+
+        - name: Download Helm signing key
+          ansible.builtin.get_url:
+            url: https://baltocdn.com/helm/signing.asc
+            dest: /etc/apt/keyrings/helm.asc
+            mode: '0644'
+
+        - name: Create Helm repository file
+          ansible.builtin.copy:
+            dest: /etc/apt/sources.list.d/helm.sources
+            content: |
+              X-Repolib-Name: helm
+              Types: deb
+              URIs: https://baltocdn.com/helm/stable/debian/
+              Signed-By: /etc/apt/keyrings/helm.asc
+              Suites: all
+              Architectures: amd64
+              Components: main
+              Enabled: yes
             mode: '0644'
 
         - name: Update apt cache after adding repositories
@@ -139,8 +198,12 @@
         - name: Install remaining required packages
           apt:
             name:
-              # Base
+              # Base dependencies
+              - apt-transport-https
+              - ca-certificates
+              - curl
               - gettext-base
+              - gnupg
               - tar
               # Locale
               - locales
@@ -168,7 +231,6 @@
               - buildah
               # Kubernetes
               - cri-o
-              - cri-tools
               - helm
               # Text and JSON processing
               - gawk
@@ -184,12 +246,36 @@
 
     - name: Install clusterctl
       block:
-        - name: Download clusterctl binary
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download and Install clusterctl binary ({{ version }})
           get_url:
-            url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ CLUSTERCTL_VERSION }}/clusterctl-linux-amd64"
+            url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ version }}/clusterctl-linux-amd64"
             dest: /usr/local/bin/clusterctl
             mode: '0755'
-      when: CLUSTERCTL_VERSION is defined and CLUSTERCTL_VERSION | trim | length > 0
+          when: version | trim | length > 0
+
+    - name: Configure and generate locale
+      block:
+        - name: Set locale in configuration
+          copy:
+            dest: /etc/default/locale
+            content: |
+              LANG=C.UTF-8
+
+        - name: Generate locale
+          command: locale-gen en_US.UTF-8
+          changed_when: false
 
     - name: Configure SSH client
       copy:
@@ -210,13 +296,13 @@
             path: /etc/ssh/sshd_config
             regexp: '^#?PermitRootLogin'
             line: 'PermitRootLogin prohibit-password'
-          notify: restart sshd
+          notify: Restart sshd
 
         - name: Remove cloud-init SSH configuration
           file:
             path: /etc/ssh/sshd_config.d/60-cloudimg-settings.conf
             state: absent
-          notify: restart sshd
+          notify: Restart sshd
 
     - name: Configure multipath
       block:
@@ -426,7 +512,7 @@
               mirror = [{ location = "{{ REGISTRY_MIRROR }}" }]
             mode: '0644'
           when: REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0
-          notify: restart crio
+          notify: Restart crio
 
         - name: Enable and start CRI-O service
           systemd:
@@ -699,15 +785,12 @@
         name: "{{ item }}"
         masked: yes
       loop:
-        - apparmor.service
         - auditd.service
         - chronyd.service
         - connman.service
         - display-manager.service
+        - ModemManager.service
         - NetworkManager.service
-        - plymouth-quit-wait.service
-        - plymouth-start.service
-        - snapd.seeded.service
 
     - name: Handle system reboot check
       block:
