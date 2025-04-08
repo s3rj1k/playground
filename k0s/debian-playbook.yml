@@ -236,6 +236,7 @@
             dest: /usr/local/bin/clusterctl
             mode: '0755'
           when: version | trim | length > 0
+      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     - name: Configure and generate locale
       block:
@@ -450,6 +451,7 @@
         - name: Trigger udev events for network interfaces if script or rules changed
           shell: find /sys/class/net -mindepth 1 -maxdepth 1 -type l -name "[a-z]*" -not -name "lo" -printf "%f\n" | xargs -I{} udevadm trigger --action=add --subsystem-match=net --sysname-match={}
           when: script_install.changed or udev_rule_install.changed
+      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     - name: Install k0s
       block:
