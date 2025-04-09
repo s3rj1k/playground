@@ -1,0 +1,98 @@
+name: Kubernetes Image Builder (mkosi)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/**'
+      - 'kubeadm/mkosi/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  MKOSI_IMAGE: ubuntu-2404
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install pipx
+        run: pip install pipx
+
+      - name: Install mkosi
+        run: |
+          sudo pip install git+https://github.com/systemd/mkosi.git
+          mkosi --version
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            debian-archive-keyring \
+            mtools \
+            systemd-boot
+
+      - name: Build OS Image
+        shell: bash
+        working-directory: kubeadm/mkosi
+        run: |
+          sudo mkosi --force --output=${{ env.MKOSI_IMAGE }} build
+          sudo chmod 0666 ${{ env.MKOSI_IMAGE }}.raw
+
+          gzip --keep ${{ env.MKOSI_IMAGE }}.raw
+
+          echo "ARTIFACT_TAG=$(cat kubelet.version | tr -d '\n')" >> $GITHUB_ENV
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image to registry
+        shell: bash
+        working-directory: kubeadm/mkosi
+        run: |
+          oras version
+
+          export DIGEST="$(sha256sum ${{ env.MKOSI_IMAGE }}.raw.gz | awk '{print $1}')"
+          export TIMESTAMP="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+          mkdir -p image-builder/images/capi/output/ && \
+            mv -v ${{ env.MKOSI_IMAGE }}.raw.gz image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-kube-${{ env.ARTIFACT_TAG }}.gz
+
+          oras push ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}:${{ env.ARTIFACT_TAG }}.gz \
+            --annotation "org.opencontainers.image.authors=${{ github.actor }}" \
+            --annotation "org.opencontainers.image.created=${TIMESTAMP}" \
+            --annotation "org.opencontainers.image.title=${{ env.MKOSI_IMAGE }}-kube" \
+            --annotation "org.opencontainers.image.version=${{ env.ARTIFACT_TAG }}" \
+            --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
+            --annotation "org.opencontainers.image.base.digest=${DIGEST}" \
+            --artifact-type application/vnd.acme.rocket.config image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-kube-${{ env.ARTIFACT_TAG }}.gz
+
+      - name: Write summary
+        shell: bash
+        working-directory: kubeadm/mkosi
+        run: |
+          echo "## Image pull using ORAS" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "oras pull ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}:${{ env.ARTIFACT_TAG }}.gz" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

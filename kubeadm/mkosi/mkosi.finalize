@@ -1,0 +1,6 @@
+#!/bin/bash
+
+set -x
+
+# Get Kubelet version out from built image
+cp -av "$BUILDROOT/kubelet.version" "$OUTPUTDIR/"
