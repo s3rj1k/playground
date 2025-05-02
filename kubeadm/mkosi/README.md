@@ -30,4 +30,4 @@
 
 *Set console size:*
 
-    stty rows 40 cols 1000
+    stty rows 40 cols 160
