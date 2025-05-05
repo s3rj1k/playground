@@ -12,7 +12,7 @@
   ignore_errors: false
   vars:
     # curl -s "https://api.github.com/repos/k0sproject/k0s/releases/latest" | jq -r ".tag_name"
-    K0S_VERSION: "v1.32.3+k0s.0"
+    K0S_VERSION: "v1.32.4+k0s.0"
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
     REGISTRY_MIRROR: ""
