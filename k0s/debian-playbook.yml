@@ -467,7 +467,6 @@
             content: |
               #!/usr/bin/python3
 
-              import ipaddress
               import os
               import subprocess
               import sys
@@ -509,22 +508,6 @@
               if 'network' not in config['spec']:
                   config['spec']['network'] = {}
               config['spec']['network']['provider'] = 'calico'
-
-              # Filter all IPv6 addresses
-              if 'api' in config['spec'] and 'sans' in config['spec']['api']:
-                  filtered_sans = []
-                  for san in config['spec']['api']['sans']:
-                      try:
-                          # Try to parse as an IP address
-                          ip = ipaddress.ip_address(san)
-                          # Keep it only if it's not an IPv6 address
-                          if ip.version != 6:
-                              filtered_sans.append(san)
-                      except ValueError:
-                          # Not an IP address (probably a hostname), keep it
-                          filtered_sans.append(san)
-
-                  config['spec']['api']['sans'] = filtered_sans
 
               # Add Helm extension configuration
               if 'extensions' not in config['spec']:
