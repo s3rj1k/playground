@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/k8s-playground.git k0s/debian-playbook.yml
+#        ansible-pull -U https://github.com/s3rj1k/k8s-playground.git -e "ENABLE_KONNECTIVITY=true" k0s/debian-playbook.yml
 
 ---
 - name: Kubernetes (k0s) on Debian/Ubuntu AMD64
@@ -13,6 +14,7 @@
   vars:
     # curl -s "https://api.github.com/repos/k0sproject/k0s/releases/latest" | jq -r ".tag_name"
     K0S_VERSION: "v1.32.4+k0s.0"
+    ENABLE_KONNECTIVITY: false
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
     REGISTRY_MIRROR: ""
@@ -488,8 +490,9 @@
               )
               config = yaml.safe_load(k0s_process.stdout)
 
-              # Remove konnectivity
-              if 'spec' in config and 'konnectivity' in config['spec']:
+              # Handle konnectivity
+              enable_konnectivity = os.environ.get('ENABLE_KONNECTIVITY', 'false').lower() == 'true'
+              if not enable_konnectivity and 'spec' in config and 'konnectivity' in config['spec']:
                   del config['spec']['konnectivity']
 
               # Set repository if registry_mirror is provided
@@ -565,6 +568,7 @@
         - name: Generate k0s configuration
           environment:
             REGISTRY_MIRROR: "{{ REGISTRY_MIRROR | default('') }}"
+            ENABLE_KONNECTIVITY: "{{ ENABLE_KONNECTIVITY | default(false) | string | lower }}"
           shell: /root/k0s.py
           changed_when: false
 
@@ -605,7 +609,11 @@
         - name: Install k0s as a Controller
           shell: |
             if [ ! -f /etc/systemd/system/k0scontroller.service ]; then
+              {% if ENABLE_KONNECTIVITY %}
+              k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --kubelet-root-dir=/var/lib/kubelet --verbose
+              {% else %}
               k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --disable-components konnectivity-server --kubelet-root-dir=/var/lib/kubelet --verbose
+              {% endif %}
             fi
           args:
             executable: /bin/bash
