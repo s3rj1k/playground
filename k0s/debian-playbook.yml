@@ -14,7 +14,9 @@
   vars:
     # curl -s "https://api.github.com/repos/k0sproject/k0s/releases/latest" | jq -r ".tag_name"
     K0S_VERSION: "v1.32.4+k0s.0"
+    ZOT_VERSION: "2.1.2"
     ENABLE_KONNECTIVITY: false
+    INSTALL_ZOT: false
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
     REGISTRY_MIRROR: ""
@@ -47,6 +49,13 @@
     - name: Restart sshd
       systemd:
         name: ssh
+        state: restarted
+        daemon_reload: yes
+      when: ansible_service_mgr == 'systemd'
+
+    - name: Restart zot
+      systemd:
+        name: zot
         state: restarted
         daemon_reload: yes
       when: ansible_service_mgr == 'systemd'
@@ -728,6 +737,104 @@
         - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
         - LB_IP_RANGE_START | default("") | length > 0
         - LB_IP_RANGE_STOP | default("") | length > 0
+
+    - name: Install and configure Zot OCI registry
+      block:
+        - name: Download Zot binary
+          get_url:
+            url: "https://github.com/project-zot/zot/releases/download/v{{ ZOT_VERSION }}/zot-linux-amd64"
+            dest: /usr/bin/zot
+            mode: '0755'
+            owner: root
+            group: root
+
+        - name: Create Zot configuration directory
+          file:
+            path: /etc/zot
+            state: directory
+            mode: '0755'
+            owner: root
+            group: root
+
+        - name: Create Zot storage directory
+          file:
+            path: /var/run/zot
+            state: directory
+            mode: '0755'
+            owner: root
+            group: root
+
+        - name: Create Zot systemd service
+          copy:
+            dest: /etc/systemd/system/zot.service
+            content: |
+              [Unit]
+              Description=OCI Distribution Registry
+              Documentation=https://zotregistry.dev/
+              After=network.target local-fs.target
+
+              [Service]
+              Type=simple
+              ExecStart=/usr/bin/zot serve /etc/zot/config.json
+              Restart=on-failure
+              LimitNOFILE=500000
+
+              [Install]
+              WantedBy=multi-user.target
+            mode: '0644'
+            owner: root
+            group: root
+
+        - name: Reload systemd daemon
+          systemd:
+            daemon_reload: yes
+
+        - name: Configure Zot
+          copy:
+            dest: /etc/zot/config.json
+            content: |
+              {
+                "distSpecVersion": "1.1.1",
+                "storage": {
+                  "rootDirectory": "/var/run/zot",
+                  "gc": true,
+                  "dedupe": true
+                },
+                "http": {
+                  "address": "0.0.0.0",
+                  "port": "8042"
+                },
+                "extensions": {
+                  "search": {
+                    "enable": true,
+                    "cve": {
+                      "updateInterval": "24h"
+                    }
+                  },
+                  "scrub": {
+                    "enable": true,
+                    "interval": "24h"
+                  },
+                  "ui": {
+                    "enable": true
+                  }
+                },
+                "log": {
+                  "level": "info"
+                }
+              }
+            mode: '0644'
+            owner: root
+            group: root
+          notify: Restart zot
+
+        - name: Enable Zot service
+          systemd:
+            name: zot
+            enabled: yes
+      when:
+        - INSTALL_ZOT | default(false) | bool
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     - name: Mask unnecessary systemd units
       systemd:
