@@ -1,0 +1,54 @@
+#!/bin/bash
+
+set -x
+
+# Mask systemd services
+ln -sf /dev/null /etc/systemd/system/auditd.service
+ln -sf /dev/null /etc/systemd/system/chronyd.service
+ln -sf /dev/null /etc/systemd/system/display-manager.service
+ln -sf /dev/null /etc/systemd/system/firewalld.service
+ln -sf /dev/null /etc/systemd/system/ModemManager.service
+ln -sf /dev/null /etc/systemd/system/NetworkManager.service
+ln -sf /dev/null /etc/systemd/system/ntpd.service
+ln -sf /dev/null /etc/systemd/system/ntpdate.service
+ln -sf /dev/null /etc/systemd/system/plymouth-quit-wait.service
+ln -sf /dev/null /etc/systemd/system/plymouth-quit.service
+ln -sf /dev/null /etc/systemd/system/plymouth-read-write.service
+ln -sf /dev/null /etc/systemd/system/plymouth-start.service
+ln -sf /dev/null /etc/systemd/system/sntp.service
+ln -sf /dev/null /etc/systemd/system/syslog.service
+ln -sf /dev/null /etc/systemd/system/syslog.socket
+ln -sf /dev/null /etc/systemd/system/systemd-homed.service
+ln -sf /dev/null /etc/systemd/system/systemd-network-generator.service
+ln -sf /dev/null /etc/systemd/system/systemd-quotacheck.service
+ln -sf /dev/null /etc/systemd/system/systemd-userdbd.service
+ln -sf /dev/null /etc/systemd/system/systemd-userdbd.socket
+
+# Enable `systemd-networkd`
+ln -s /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/dbus-org.freedesktop.network1.service
+ln -s /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/multi-user.target.wants/systemd-networkd.service
+ln -s /usr/lib/systemd/system/systemd-networkd.socket /etc/systemd/system/sockets.target.wants/systemd-networkd.socket
+# ln -s /usr/lib/systemd/system/systemd-networkd-wait-online.service /etc/systemd/system/network-online.target.wants/systemd-networkd-wait-online.service
+
+# Disable swap
+sed -i 's/^\([^#].*[[:space:]]\+swap[[:space:]]\+.*\)$/#\1/' /etc/fstab
+
+# Tweak SSHD config
+if [ -e /etc/ssh/sshd_config ]; then
+	sed -i -e 's/^#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+	sed -i -e 's/^#PermitRootLogin /PermitRootLogin /' /etc/ssh/sshd_config
+	sed -i -e 's/^PermitRootLogin .*/PermitRootLogin without-password/' /etc/ssh/sshd_config
+fi
+
+# Empty out files
+empty_files=(
+	etc/hostname
+	etc/machine-id
+)
+for i in "${empty_files[@]}"; do
+	> /$i
+done
+
+# Clean cache
+rm -fr /var/cache && \
+dnf -y clean all

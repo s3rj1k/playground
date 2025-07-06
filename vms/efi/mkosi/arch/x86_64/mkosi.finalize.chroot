@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Prepare locale
+locale-gen
+
+# Setup pacman
+pacman-key --init
+pacman-key --populate archlinux
+
+# Mask systemd services
+systemctl mask systemd-homed
+systemctl mask systemd-userdbd
+systemctl mask systemd-userdbd.socket
+systemctl mask systemd-resolved
