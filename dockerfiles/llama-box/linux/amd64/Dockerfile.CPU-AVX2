@@ -1,0 +1,36 @@
+# https://github.com/gpustack/.github/blob/main/cpu/rockylinux/Dockerfile
+FROM gpustack/devel-cpu:rockylinux8.9 AS builder
+
+ARG LLAMA_BOX_TAG=v0.0.127
+
+# https://github.com/gpustack/llama-box/blob/v0.0.127/.github/workflows/ci.yml#L197
+RUN rm -rf /opt/rh/devtoolset-9/root/usr/lib/gcc/$(uname -m)-redhat-linux/9/libgomp* || true && \
+    rm -rf /opt/rh/gcc-toolset-11/root/usr/lib/gcc/$(uname -m)-redhat-linux/11/libgomp* || true && \
+    rm -rf /usr/lib/gcc/$(uname -m)-linux-gnu/11/libgomp* || true && \
+    rm -rf /opt/openEuler/gcc-toolset-10/root/usr/lib/gcc/$(uname -m)-linux-gnu/10/libgomp* || true
+
+WORKDIR /workspace
+RUN git clone --recursive https://github.com/gpustack/llama-box.git --branch ${LLAMA_BOX_TAG} --depth 1 .
+
+RUN mkdir -p build && \
+    cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DGGML_CPU_AARCH64=off \
+          -DGGML_NATIVE=off \
+          -DGGML_AVX=on \
+          -DGGML_AVX_VNNI=off \
+          -DGGML_AVX2=on \
+          -DGGML_BLAS_VENDOR=OpenBLAS \
+          -DGGML_STATIC=on \
+          -DGGML_BLAS=on \
+          -DGGML_OPENMP=off \
+          -DGGML_RPC=on && \
+    cmake --build build --target llama-box --config Release -- -j $(nproc)
+
+FROM rockylinux:8.9-minimal AS runtime
+
+LABEL org.opencontainers.image.licenses=MIT
+
+COPY --from=builder /workspace/build/bin/llama-box /usr/local/bin/
+
+ENTRYPOINT ["/usr/local/bin/llama-box"]

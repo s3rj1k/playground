@@ -1,0 +1,35 @@
+# https://github.com/gpustack/.github/blob/main/vulkan/ubuntu/Dockerfile
+FROM gpustack/devel-lunarg-vulkan:1.4.304-ubuntu22.04 AS builder
+
+ARG LLAMA_BOX_TAG=v0.0.127
+
+WORKDIR /workspace
+RUN git clone --recursive https://github.com/gpustack/llama-box.git --branch ${LLAMA_BOX_TAG} --depth 1 .
+
+RUN mkdir -p build && \
+    cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DGGML_VULKAN=on \
+          -DGGML_NATIVE=off \
+          -DGGML_CPU_AARCH64=off \
+          -DGGML_OPENMP=off \
+          -DGGML_RPC=on && \
+    cmake --build build --target llama-box --config Release -- -j $(nproc)
+
+FROM ubuntu:22.04 AS runtime
+
+LABEL org.opencontainers.image.licenses=MIT
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libvulkan1 \
+        mesa-vulkan-drivers \
+        vulkan-tools \
+        vulkan-validationlayers \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /workspace/build/bin/llama-box /usr/local/bin/
+
+ENTRYPOINT ["/usr/local/bin/llama-box"]
