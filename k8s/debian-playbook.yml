@@ -1,7 +1,7 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: MIT
 
-# DEBUG: ansible-pull -U https://github.com/s3rj1k/k8s-playground.git k8s/debian-playbook.yml
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git k8s/debian-playbook.yml
 # ref: https://philprime.dev/guides/building-a-production-ready-kubernetes-cluster-from-scratch/lesson-8
 
 ---

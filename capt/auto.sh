@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Based on `capt` from https://github.com/tinkerbell/playground.git
-# clone: git clone https://github.com/s3rj1k/k8s-playground.git && cd k8s-playground/capt
+# clone: git clone https://github.com/s3rj1k/playground.git && cd k8s-playground/capt
 
 # code formatter: shfmt -s -w -sr -kp -fn -bn auto.sh
 # commit to gist: git commit --allow-empty-message -S -am ''

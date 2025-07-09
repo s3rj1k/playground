@@ -1,8 +1,8 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: MIT
 
-# DEBUG: ansible-pull -U https://github.com/s3rj1k/k8s-playground.git k0s/debian-playbook-crio.yml
-#        ansible-pull -U https://github.com/s3rj1k/k8s-playground.git -e "ENABLE_KONNECTIVITY=true" k0s/debian-playbook-crio.yml
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git k0s/debian-playbook-crio.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "ENABLE_KONNECTIVITY=true" k0s/debian-playbook-crio.yml
 
 ---
 - name: Kubernetes (k0s) on Debian/Ubuntu AMD64
@@ -692,14 +692,16 @@
         - name: Install k0s as a Controller
           shell: |
             if [ ! -f /etc/systemd/system/k0scontroller.service ]; then
-              {% if ENABLE_KONNECTIVITY %}
-              k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
-              {% else %}
-              k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --disable-components konnectivity-server --kubelet-root-dir=/var/lib/kubelet --verbose
-              {% endif %}
+              if [ "${ENABLE_KONNECTIVITY:-false}" = "true" ]; then
+                k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
+              else
+                k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --disable-components konnectivity-server --kubelet-root-dir=/var/lib/kubelet --verbose
+              fi
             fi
           args:
             executable: /bin/bash
+          environment:
+            ENABLE_KONNECTIVITY: "{{ ENABLE_KONNECTIVITY | default('false') }}"
           when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Create Worker token file
