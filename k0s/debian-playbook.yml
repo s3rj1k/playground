@@ -13,8 +13,8 @@
   ignore_errors: false
   vars:
     # curl -s "https://api.github.com/repos/k0sproject/k0s/releases/latest" | jq -r ".tag_name"
-    K0S_VERSION: "v1.32.4+k0s.0"
-    ZOT_VERSION: "2.1.2"
+    K0S_VERSION: "v1.32.6+k0s.0"
+    ZOT_VERSION: "2.1.5"
     ENABLE_KONNECTIVITY: false
     INSTALL_ZOT: false
     LB_IP_RANGE_START: ""
@@ -151,7 +151,7 @@
           ansible.builtin.file:
             path: /etc/apt/keyrings
             state: directory
-            mode: '0755'
+            mode: "0755"
 
         # Note: `ansible.builtin.deb822_repository` requires Ansible 2.15+
 
@@ -159,7 +159,7 @@
           ansible.builtin.get_url:
             url: https://baltocdn.com/helm/signing.asc
             dest: /etc/apt/keyrings/helm.asc
-            mode: '0644'
+            mode: "0644"
 
         - name: Create Helm repository file
           ansible.builtin.copy:
@@ -173,7 +173,7 @@
               Architectures: amd64
               Components: main
               Enabled: yes
-            mode: '0644'
+            mode: "0644"
 
         - name: Update apt cache after adding repositories
           apt:
@@ -245,7 +245,7 @@
           get_url:
             url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ version }}/clusterctl-linux-amd64"
             dest: /usr/local/bin/clusterctl
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
       when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
@@ -278,8 +278,8 @@
         - name: Configure root login restrictions
           lineinfile:
             path: /etc/ssh/sshd_config
-            regexp: '^#?PermitRootLogin'
-            line: 'PermitRootLogin prohibit-password'
+            regexp: "^#?PermitRootLogin"
+            line: "PermitRootLogin prohibit-password"
           notify: Restart sshd
 
         - name: Remove cloud-init SSH configuration
@@ -297,7 +297,7 @@
               defaults {
                 user_friendly_names yes
               }
-            mode: '0644'
+            mode: "0644"
           register: multipath_conf
 
         - name: Enable and start multipathd service
@@ -327,7 +327,7 @@
             content: |
               overlay
               br_netfilter
-            mode: '0644'
+            mode: "0644"
 
         - name: Configure kernel parameters
           copy:
@@ -345,7 +345,7 @@
               net.ipv6.conf.all.disable_ipv6 = 0
               net.ipv6.conf.all.forwarding = 1
               vm.overcommit_memory = 1
-            mode: '0644'
+            mode: "0644"
 
         - name: Apply kernel parameters
           command: sysctl --system
@@ -372,7 +372,7 @@
           file:
             path: /etc/default/grub.d
             state: directory
-            mode: '0755'
+            mode: "0755"
 
         - name: Configure GRUB settings
           copy:
@@ -389,7 +389,7 @@
 
               # Set the grub console type
               GRUB_TERMINAL=console
-            mode: '0644'
+            mode: "0644"
           register: grub_config
 
         - name: Update GRUB configuration
@@ -402,7 +402,7 @@
           file:
             path: /usr/local/sbin
             state: directory
-            mode: '0755'
+            mode: "0755"
             owner: root
             group: root
 
@@ -439,7 +439,7 @@
               tc filter add dev ${DEV} parent 1: protocol ip prio 2 u32 match ip dport 2379 0xffff flowid 1:1
 
               exit 0
-            mode: '0755'
+            mode: "0755"
             owner: root
             group: root
           register: script_install
@@ -449,7 +449,7 @@
             dest: /etc/udev/rules.d/90-etcd-network-tuning.rules
             content: |
               ACTION=="add", SUBSYSTEM=="net", SUBSYSTEMS=="pci|xen|vmbus" RUN+="/usr/local/sbin/etcd-network-tuning.sh $name"
-            mode: '0644'
+            mode: "0644"
             owner: root
             group: root
           register: udev_rule_install
@@ -469,7 +469,7 @@
           get_url:
             url: "https://github.com/k0sproject/k0s/releases/download/{{ K0S_VERSION }}/k0s-{{ K0S_VERSION }}-amd64"
             dest: /usr/local/bin/k0s
-            mode: '0755'
+            mode: "0755"
 
         - name: Create k0s configuration script
           copy:
@@ -571,7 +571,7 @@
               # Write the modified config to file
               with open(k0s_config_path, 'w') as f:
                   yaml.dump(config, f, default_flow_style=False)
-            mode: '0755'
+            mode: "0755"
 
         - name: Generate k0s configuration
           environment:
@@ -584,14 +584,14 @@
           file:
             path: /etc/systemd/system/k0scontroller.service.d
             state: directory
-            mode: '0755'
+            mode: "0755"
           when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Create systemd override directory for k0sworker
           file:
             path: /etc/systemd/system/k0sworker.service.d
             state: directory
-            mode: '0755'
+            mode: "0755"
           when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Configure k0scontroller service override
@@ -601,7 +601,7 @@
               [Service]
               LimitNOFILE=1048576
               OOMScoreAdjust=-999
-            mode: '0644'
+            mode: "0644"
           when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Configure k0sworker service override
@@ -611,7 +611,7 @@
               [Service]
               LimitNOFILE=1048576
               OOMScoreAdjust=-999
-            mode: '0644'
+            mode: "0644"
           when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Install k0s as a Controller
@@ -633,7 +633,7 @@
           copy:
             content: "{{ WORKER_DATA }}"
             dest: /root/k0s-token
-            mode: '0600'
+            mode: "0600"
           when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Install k0s as a Worker with token
@@ -649,7 +649,7 @@
           file:
             path: /etc/k0s/containerd.d/
             state: directory
-            mode: '0755'
+            mode: "0755"
 
         - name: Configure containerd registry mirrors
           copy:
@@ -672,7 +672,7 @@
 
                   [plugins."io.containerd.grpc.v1.cri".registry.mirrors."registry.k8s.io"]
                     endpoint = ["{{ REGISTRY_MIRROR }}/v2/"]
-            mode: '0644'
+            mode: "0644"
           when: REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0
 
         - name: Start k0s Controller service
@@ -694,7 +694,7 @@
             dest: /etc/profile.d/k0s.sh
             content: |
               export KUBECONFIG=/var/lib/k0s/pki/admin.conf
-            mode: '0644'
+            mode: "0644"
           when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Create kubectl symlink
@@ -723,7 +723,7 @@
               metadata:
                 name: default-l2adv
                 namespace: metallb-system
-            mode: '0644'
+            mode: "0644"
 
         - name: Apply MetalLB configuration
           shell: |
@@ -745,7 +745,7 @@
           get_url:
             url: "https://github.com/project-zot/zot/releases/download/v{{ ZOT_VERSION }}/zot-linux-amd64"
             dest: /usr/bin/zot
-            mode: '0755'
+            mode: "0755"
             owner: root
             group: root
 
@@ -753,7 +753,7 @@
           file:
             path: /etc/zot
             state: directory
-            mode: '0755'
+            mode: "0755"
             owner: root
             group: root
 
@@ -761,7 +761,7 @@
           file:
             path: /var/run/zot
             state: directory
-            mode: '0755'
+            mode: "0755"
             owner: root
             group: root
 
@@ -782,7 +782,7 @@
 
               [Install]
               WantedBy=multi-user.target
-            mode: '0644'
+            mode: "0644"
             owner: root
             group: root
 
@@ -824,7 +824,7 @@
                   "level": "info"
                 }
               }
-            mode: '0644'
+            mode: "0644"
             owner: root
             group: root
           notify: Restart zot
