@@ -94,6 +94,7 @@ RUN python3 -m pip install --upgrade huggingface-hub[cli]
 RUN --mount=type=bind,from=export_vllm,src=/,target=/install \
     cd /install \
     && pip install -U -r requirements/rocm.txt \
+    && pip install blobfile \
     && pip uninstall -y vllm \
     && pip install *.whl
 
