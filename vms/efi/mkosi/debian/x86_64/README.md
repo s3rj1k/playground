@@ -14,11 +14,11 @@
 
 *Convert RAW image to QCOW2:*
 
-    qemu-img convert -f raw -O qcow2 -c debian.vm.raw debian.vm.qcow2
+    qemu-img convert -f raw -O qcow2 -c disk.vm.raw disk.vm.qcow2
 
 *Convert RAW image to VDI:*
 
-    VBoxManage convertfromraw debian.vm.raw --format vdi debian.vm.vdi
+    VBoxManage convertfromraw disk.vm.raw --format vdi disk.vm.vdi
 
 *Build (force) OCI directory layout image:*
 
