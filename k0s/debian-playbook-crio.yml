@@ -692,9 +692,9 @@
           shell: |
             if [ ! -f /etc/systemd/system/k0scontroller.service ]; then
               if [ "${ENABLE_KONNECTIVITY:-false}" = "true" ]; then
-                k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
+                k0s install controller -c /root/k0s.yaml --enable-dynamic-config --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
               else
-                k0s install controller -c /root/k0s.yaml --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --disable-components konnectivity-server --kubelet-root-dir=/var/lib/kubelet --verbose
+                k0s install controller -c /root/k0s.yaml --enable-dynamic-config --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --disable-components konnectivity-server --kubelet-root-dir=/var/lib/kubelet --verbose
               fi
             fi
           args:
