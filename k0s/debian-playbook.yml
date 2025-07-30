@@ -14,7 +14,6 @@
   vars:
     # curl -s "https://api.github.com/repos/k0sproject/k0s/releases/latest" | jq -r ".tag_name"
     K0S_VERSION: "v1.32.6+k0s.0"
-    ZOT_VERSION: "2.1.5"
     ENABLE_KONNECTIVITY: false
     INSTALL_ZOT: false
     LB_IP_RANGE_START: ""
@@ -741,13 +740,26 @@
 
     - name: Install and configure Zot OCI registry
       block:
+        - name: Get latest Zot version
+          uri:
+            url: "https://api.github.com/repos/project-zot/zot/releases/latest"
+            return_content: yes
+          register: zot_release_info
+
+        - name: Set Zot version
+          set_fact:
+            # curl -s "https://api.github.com/repos/project-zot/zot/releases/latest" | jq -r ".tag_name"
+            zot_version: "{{ zot_release_info.json.tag_name }}"
+          when: zot_release_info is defined and zot_release_info.status == 200
+
         - name: Download Zot binary
           get_url:
-            url: "https://github.com/project-zot/zot/releases/download/v{{ ZOT_VERSION }}/zot-linux-amd64"
+            url: "https://github.com/project-zot/zot/releases/download/{{ zot_version }}/zot-linux-amd64"
             dest: /usr/bin/zot
             mode: "0755"
             owner: root
             group: root
+          when: zot_version | trim | length > 0
 
         - name: Create Zot configuration directory
           file:
