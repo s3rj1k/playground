@@ -25,6 +25,7 @@ systemctl mask ufw.service
 # Enable systemd services
 systemctl enable systemd-networkd.service
 systemctl enable systemd-resolved.service
+systemctl enable docker.service
 
 # Disable swap
 sed -i 's/^\([^#].*[[:space:]]\+swap[[:space:]]\+.*\)$/#\1/' /etc/fstab
