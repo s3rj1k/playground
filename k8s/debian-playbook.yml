@@ -12,8 +12,8 @@
   gather_facts: true
   ignore_errors: false
   vars:
-    KUBERNETES_VERSION: "v1.32"
-    CRIO_VERSION: "v1.32"
+    KUBERNETES_VERSION: "v1.33"
+    CRIO_VERSION: "v1.33"
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
     REGISTRY_MIRROR: ""
@@ -649,14 +649,14 @@
             force: true
 
         - name: Check if Control Plane taint exists
-          shell: kubectl get nodes -o jsonpath='{.items[*].spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")].key}'
+          shell: kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes -o jsonpath='{.items[*].spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")].key}'
           environment:
             KUBECONFIG: /etc/kubernetes/admin.conf
           register: taint_check
           changed_when: false
 
         - name: Remove taints from Control Plane nodes
-          command: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+          command: kubectl --kubeconfig /etc/kubernetes/admin.conf taint nodes --all node-role.kubernetes.io/control-plane-
           environment:
             KUBECONFIG: /etc/kubernetes/admin.conf
           register: remove_taint
@@ -706,7 +706,7 @@
           when: cilium_cli_version is defined and cilium_cli_version | trim | length > 0
 
         - name: Check if Cilium is already installed
-          command: cilium status
+          command: cilium status --kubeconfig /etc/kubernetes/admin.conf
           environment:
             KUBECONFIG: /etc/kubernetes/admin.conf
             HOME: /root
@@ -717,7 +717,7 @@
           when: cilium_cli_version is defined and cilium_cli_version | trim | length > 0
 
         - name: Install Cilium {{ cilium_version }} if not already installed
-          command: cilium install --version {{ cilium_version }}
+          command: cilium install --version {{ cilium_version }} --kubeconfig /etc/kubernetes/admin.conf
           environment:
             KUBECONFIG: /etc/kubernetes/admin.conf
             HOME: /root
@@ -730,7 +730,7 @@
             - cilium_version is defined and cilium_version | trim | length > 0
 
         - name: Wait for Cilium to be ready
-          command: cilium status --wait
+          command: cilium status --wait --kubeconfig /etc/kubernetes/admin.conf
           environment:
             KUBECONFIG: /etc/kubernetes/admin.conf
             HOME: /root

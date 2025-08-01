@@ -26,11 +26,10 @@ parameters:
   image_id:
     type: string
     description: "Image to use for the instances."
-    default: debian-12-genericcloud-amd64
+    default: ubuntu-24.04-minimal-cloudimg-amd64
     label: "Server Image"
     constraints:
       - allowed_values:
-          - debian-12-genericcloud-amd64
           - ubuntu-24.04-minimal-cloudimg-amd64
         description: "Must be a known Image ID"
 
@@ -268,7 +267,7 @@ resources:
 
             runcmd:
               - |
-                apt-get update && apt-get install -y ansible-core git || true
+                apt-get update && apt-get install -y ansible git python3-jmespath || true
 
                 ansible-pull -U "https://github.com/s3rj1k/playground.git" \
                   %ansible_playbook% \
@@ -278,7 +277,7 @@ resources:
                       LB_IP_RANGE_STOP='%lb_ip_range_stop%'"
                 ANSIBLE_RESULT=$?
 
-                apt-get remove -y --autoremove --purge ansible-core || true
+                apt-get remove -y --autoremove --purge ansible || true
 
                 if [ $ANSIBLE_RESULT -eq 0 ]; then
                   WORKER_DATA=$(kubeadm token create --print-join-command)
@@ -330,7 +329,7 @@ resources:
 
             runcmd:
               - |
-                apt-get update && apt-get install -y ansible-core git jq || true
+                apt-get update && apt-get install -y ansible git jq python3-jmespath || true
 
                 WORKER_DATA=$(cat /tmp/worker_data.json | jq -r '."1"')
                 rm -f /tmp/worker_data.json
@@ -342,7 +341,7 @@ resources:
                       WORKER_DATA='${WORKER_DATA}'"
                 ANSIBLE_RESULT=$?
 
-                apt-get remove -y --autoremove --purge ansible-core || true
+                apt-get remove -y --autoremove --purge ansible || true
 
                 if [ $ANSIBLE_RESULT -eq 0 ]; then
                   %wc_notify% --data-binary '{"status": "SUCCESS", "data": "Worker node #1 setup complete"}'
