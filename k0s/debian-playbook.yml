@@ -14,6 +14,7 @@
   vars:
     K0S_MAJOR_MINOR_VERSION: "1.32"
     ENABLE_KONNECTIVITY: false
+    ENABLE_DYNAMIC_CONFIG: false
     INSTALL_ZOT: false
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
@@ -632,16 +633,23 @@
         - name: Install k0s as a Controller
           shell: |
             if [ ! -f /etc/systemd/system/k0scontroller.service ]; then
-              if [ "${ENABLE_KONNECTIVITY:-false}" = "true" ]; then
-                k0s install controller -c /root/k0s.yaml --enable-dynamic-config --enable-worker --no-taints --kubelet-root-dir=/var/lib/kubelet --verbose
-              else
-                k0s install controller -c /root/k0s.yaml --enable-dynamic-config --enable-worker --no-taints --disable-components konnectivity-server --kubelet-root-dir=/var/lib/kubelet --verbose
+              DYNAMIC_CONFIG_FLAG=""
+              if [ "${ENABLE_DYNAMIC_CONFIG:-false}" = "true" ]; then
+                DYNAMIC_CONFIG_FLAG="--enable-dynamic-config"
               fi
+
+              DISABLED_COMPONENTS=""
+              if [ "${ENABLE_KONNECTIVITY:-false}" = "false" ] || [ -z "${ENABLE_KONNECTIVITY}" ]; then
+                DISABLED_COMPONENTS="--disable-components konnectivity-server"
+              fi
+
+              k0s install controller -c /root/k0s.yaml $DYNAMIC_CONFIG_FLAG $DISABLED_COMPONENTS --enable-worker --no-taints --kubelet-root-dir=/var/lib/kubelet --verbose
             fi
           args:
             executable: /bin/bash
           environment:
-            ENABLE_KONNECTIVITY: "{{ ENABLE_KONNECTIVITY | default('false') }}"
+            ENABLE_KONNECTIVITY: "{{ ENABLE_KONNECTIVITY | default(false) | string | lower }}"
+            ENABLE_DYNAMIC_CONFIG: "{{ ENABLE_DYNAMIC_CONFIG | default(false) | string | lower }}"
           when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
         - name: Create Worker token file
