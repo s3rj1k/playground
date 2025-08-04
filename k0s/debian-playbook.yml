@@ -514,11 +514,6 @@
               )
               config = yaml.safe_load(k0s_process.stdout)
 
-              # Handle konnectivity
-              enable_konnectivity = os.environ.get('ENABLE_KONNECTIVITY', 'false').lower() == 'true'
-              if not enable_konnectivity and 'spec' in config and 'konnectivity' in config['spec']:
-                  del config['spec']['konnectivity']
-
               # Set repository if registry_mirror is provided
               if registry_mirror and len(registry_mirror.strip()) > 0:
                   if 'images' not in config['spec']:
@@ -531,10 +526,16 @@
 
               config['spec']['telemetry']['enabled'] = False
 
-              # Set network provider to Calico
+              # Set network provider to Calico with configuration
               if 'network' not in config['spec']:
                   config['spec']['network'] = {}
               config['spec']['network']['provider'] = 'calico'
+              config['spec']['network']['calico'] = {
+                  'ipAutodetectionMethod': 'can-reach=8.8.8.8',
+                  'envVars': {
+                      'FELIX_IGNORELOOSERPF': 'true'
+                  }
+              }
 
               # Add Helm extension configuration
               if 'extensions' not in config['spec']:
@@ -592,7 +593,6 @@
         - name: Generate k0s configuration
           environment:
             REGISTRY_MIRROR: "{{ REGISTRY_MIRROR | default('') }}"
-            ENABLE_KONNECTIVITY: "{{ ENABLE_KONNECTIVITY | default(false) | string | lower }}"
           shell: /root/k0s.py
           changed_when: false
 
