@@ -351,9 +351,7 @@
     - name: Configure kernel modules
       block:
         - name: Ensure required kernel modules are loaded
-          modprobe:
-            name: "{{ item }}"
-            state: present
+          shell: modprobe {{ item }}
           loop:
             - overlay
             - br_netfilter
@@ -542,23 +540,22 @@
 
     - name: Initialize Kubernetes Control Plane
       block:
-        - name: Fetch all Kubernetes releases
-          uri:
-            url: "https://api.github.com/repos/kubernetes/kubernetes/releases"
-            return_content: yes
-          register: k8s_releases
-
         - name: Extract latest patch release for {{ KUBERNETES_VERSION }}
-          # curl -s "https://api.github.com/repos/kubernetes/kubernetes/releases" | jq -r '[.[] | select(.tag_name | startswith("v1.32."))] | sort_by(.published_at) | reverse | .[0].tag_name'
+          shell: |
+            curl -s --fail "https://api.github.com/repos/kubernetes/kubernetes/releases" | tr -d '\000-\037' | jq -r '
+              [.[] | select(.tag_name | startswith("{{ KUBERNETES_VERSION }}.")) |
+               select(.prerelease == false)] |
+              sort_by(.published_at) |
+              reverse'
+          register: k8s_releases_filtered_raw
+
+        - name: Parse filtered releases
           set_fact:
-            k8s_releases_filtered: >-
-              {{ k8s_releases.json |
-                 json_query(query_string) |
-                 sort(attribute='published_at') |
-                 reverse }}
-          vars:
-            query_string: "[?starts_with(tag_name, '{{ KUBERNETES_VERSION }}.')]"
-          when: k8s_releases is defined and k8s_releases.status == 200
+            k8s_releases_filtered: "{{ k8s_releases_filtered_raw.stdout | from_json }}"
+          when:
+            - k8s_releases_filtered_raw is defined
+            - k8s_releases_filtered_raw.stdout != ""
+            - k8s_releases_filtered_raw.stdout != "null"
 
         - name: Set version from patch releases if available
           set_fact:
@@ -621,6 +618,13 @@
           register: kubectl_get_nodes
           changed_when: false
           failed_when: false
+
+        - name: Reset Kubernetes Control Plane if needed
+          command: kubeadm reset --force
+          register: kubeadm_reset
+          changed_when: true
+          failed_when: false
+          when: kubectl_get_nodes.rc != 0
 
         - name: Initialize the Kubernetes Control Plane
           command: kubeadm init --config=/root/kubeadm-config.yaml
