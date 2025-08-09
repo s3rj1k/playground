@@ -27,6 +27,7 @@ systemctl mask systemd-userdbd.socket
 systemctl mask ufw.service
 systemctl mask crio.service
 systemctl mask kubelet.service
+systemctl mask docker.service
 
 # Enable systemd services
 systemctl enable multipathd.service
@@ -113,3 +114,6 @@ kubelet --version | awk '{print $2}' | tee /kubelet.version
 # Clean apt cache
 rm -vrf /var/lib/apt/lists /var/cache/apt
 apt clean
+
+# Prepare locale
+locale-gen

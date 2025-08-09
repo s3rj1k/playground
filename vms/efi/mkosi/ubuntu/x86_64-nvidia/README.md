@@ -1,4 +1,4 @@
-**Kubernetes OS Image.**
+**NVIDIA OS Image.**
 
 *Build RAW image:*
 

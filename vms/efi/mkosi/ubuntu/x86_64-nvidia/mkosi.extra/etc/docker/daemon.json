@@ -1,0 +1,29 @@
+{
+  "default-address-pools": [
+    {
+      "base": "172.17.0.0/16",
+      "size": 24
+    }
+  ],
+  "dns": [
+    "172.17.0.1"
+  ],
+  "builder": {
+    "gc": {
+      "enabled": true,
+      "defaultKeepStorage": "10GB",
+      "policy": [
+        {
+          "keepStorage": "10GB",
+          "filter": [
+            "unused-for=42h"
+          ]
+        },
+        {
+          "keepStorage": "50GB",
+          "all": true
+        }
+      ]
+    }
+  }
+}
