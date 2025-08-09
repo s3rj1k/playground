@@ -5,8 +5,8 @@ on:
     branches:
       - main
     paths:
-      - '.github/k8s-mkosi_build.yaml'
-      - 'kubeadm/mkosi/**'
+      - '.github/workflows/k8s-mkosi_build.yaml'
+      - 'vms/efi/mkosi/ubuntu/x86_64/**'
   workflow_dispatch:
 
 env:
@@ -51,7 +51,7 @@ jobs:
 
       - name: Build OS Image
         shell: bash
-        working-directory: kubeadm/mkosi
+        working-directory: vms/efi/mkosi/ubuntu/x86_64
         run: |
           sudo mkosi --force --output=${{ env.MKOSI_IMAGE }} build
           sudo chmod 0666 ${{ env.MKOSI_IMAGE }}.raw
@@ -69,7 +69,7 @@ jobs:
 
       - name: Push image to registry
         shell: bash
-        working-directory: kubeadm/mkosi
+        working-directory: vms/efi/mkosi/ubuntu/x86_64
         run: |
           oras version
 
@@ -90,7 +90,7 @@ jobs:
 
       - name: Write summary
         shell: bash
-        working-directory: kubeadm/mkosi
+        working-directory: vms/efi/mkosi/ubuntu/x86_64
         run: |
           echo "## Image pull using ORAS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
