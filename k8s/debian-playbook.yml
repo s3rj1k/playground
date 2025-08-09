@@ -3,7 +3,6 @@
 
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git k8s/debian-playbook.yml
 # ref: https://philprime.dev/guides/building-a-production-ready-kubernetes-cluster-from-scratch/lesson-8
-
 ---
 - name: Kubernetes (k8s) on Debian AMD64
   hosts: localhost
@@ -14,6 +13,7 @@
   vars:
     KUBERNETES_VERSION: "v1.33"
     CRIO_VERSION: "v1.33"
+    INSTALL_ZOT: false
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
     REGISTRY_MIRROR: ""
@@ -53,6 +53,13 @@
     - name: Restart crio
       systemd:
         name: crio
+        state: restarted
+        daemon_reload: yes
+      when: ansible_service_mgr == 'systemd'
+
+    - name: Restart zot
+      systemd:
+        name: zot
         state: restarted
         daemon_reload: yes
       when: ansible_service_mgr == 'systemd'
@@ -149,7 +156,7 @@
           ansible.builtin.file:
             path: /etc/apt/keyrings
             state: directory
-            mode: '0755'
+            mode: "0755"
 
         # Note: `ansible.builtin.deb822_repository` requires Ansible 2.15+
 
@@ -157,7 +164,7 @@
           ansible.builtin.get_url:
             url: "https://prod-cdn.packages.k8s.io/repositories/isv:/kubernetes:/core:/stable:/{{ KUBERNETES_VERSION }}/deb/Release.key"
             dest: "/etc/apt/keyrings/kubernetes.asc"
-            mode: '0644'
+            mode: "0644"
 
         - name: Create Kubernetes repository file
           ansible.builtin.copy:
@@ -170,13 +177,13 @@
               Suites: /
               Architectures: amd64
               Enabled: yes
-            mode: '0644'
+            mode: "0644"
 
         - name: Download CRI-O signing key
           ansible.builtin.get_url:
             url: "https://download.opensuse.org/repositories/isv:/cri-o:/stable:/{{ CRIO_VERSION }}/deb/Release.key"
             dest: "/etc/apt/keyrings/crio.asc"
-            mode: '0644'
+            mode: "0644"
 
         - name: Create CRI-O repository file
           ansible.builtin.copy:
@@ -189,13 +196,13 @@
               Suites: /
               Architectures: amd64
               Enabled: yes
-            mode: '0644'
+            mode: "0644"
 
         - name: Download Helm signing key
           ansible.builtin.get_url:
             url: https://baltocdn.com/helm/signing.asc
             dest: /etc/apt/keyrings/helm.asc
-            mode: '0644'
+            mode: "0644"
 
         - name: Create Helm repository file
           ansible.builtin.copy:
@@ -209,7 +216,7 @@
               Architectures: amd64
               Components: main
               Enabled: yes
-            mode: '0644'
+            mode: "0644"
 
         - name: Update apt cache after adding repositories
           apt:
@@ -281,7 +288,7 @@
           get_url:
             url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ version }}/clusterctl-linux-amd64"
             dest: /usr/local/bin/clusterctl
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
       when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
@@ -314,8 +321,8 @@
         - name: Configure root login restrictions
           lineinfile:
             path: /etc/ssh/sshd_config
-            regexp: '^#?PermitRootLogin'
-            line: 'PermitRootLogin prohibit-password'
+            regexp: "^#?PermitRootLogin"
+            line: "PermitRootLogin prohibit-password"
           notify: Restart sshd
 
         - name: Remove cloud-init SSH configuration
@@ -333,7 +340,7 @@
               defaults {
                 user_friendly_names yes
               }
-            mode: '0644'
+            mode: "0644"
           register: multipath_conf
 
         - name: Enable and start multipathd service
@@ -355,6 +362,7 @@
           loop:
             - overlay
             - br_netfilter
+          changed_when: false
 
         - name: Persist required kernel modules
           copy:
@@ -362,7 +370,7 @@
             content: |
               overlay
               br_netfilter
-            mode: '0644'
+            mode: "0644"
 
         - name: Configure kernel parameters
           copy:
@@ -380,7 +388,7 @@
               net.ipv6.conf.all.disable_ipv6 = 0
               net.ipv6.conf.all.forwarding = 1
               vm.overcommit_memory = 1
-            mode: '0644'
+            mode: "0644"
 
         - name: Apply kernel parameters
           command: sysctl --system
@@ -407,7 +415,7 @@
           file:
             path: /etc/default/grub.d
             state: directory
-            mode: '0755'
+            mode: "0755"
 
         - name: Configure GRUB settings
           copy:
@@ -424,7 +432,7 @@
 
               # Set the grub console type
               GRUB_TERMINAL=console
-            mode: '0644'
+            mode: "0644"
           register: grub_config
 
         - name: Check if /boot/grub directory exists
@@ -442,7 +450,7 @@
           file:
             path: /usr/local/sbin
             state: directory
-            mode: '0755'
+            mode: "0755"
             owner: root
             group: root
 
@@ -479,7 +487,7 @@
               tc filter add dev ${DEV} parent 1: protocol ip prio 2 u32 match ip dport 2379 0xffff flowid 1:1
 
               exit 0
-            mode: '0755'
+            mode: "0755"
             owner: root
             group: root
           register: script_install
@@ -489,7 +497,7 @@
             dest: /etc/udev/rules.d/90-etcd-network-tuning.rules
             content: |
               ACTION=="add", SUBSYSTEM=="net", SUBSYSTEMS=="pci|xen|vmbus" RUN+="/usr/local/sbin/etcd-network-tuning.sh $name"
-            mode: '0644'
+            mode: "0644"
             owner: root
             group: root
           register: udev_rule_install
@@ -534,7 +542,7 @@
               prefix = "k8s.gcr.io"
               location = "k8s.gcr.io"
               mirror = [{ location = "{{ REGISTRY_MIRROR }}" }]
-            mode: '0644'
+            mode: "0644"
           when: REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0
           notify: Restart crio
 
@@ -594,7 +602,7 @@
               cgroupDriver: systemd
               featureGates:
                 ImageVolume: true
-            mode: '0644'
+            mode: "0644"
           when: version is defined and version | trim | length > 0
 
         - name: Enable and start Kubelet service
@@ -643,7 +651,7 @@
             state: directory
             owner: root
             group: root
-            mode: '0700'
+            mode: "0700"
 
         - name: Create symlink from admin.conf to .kube/config
           file:
@@ -705,7 +713,7 @@
         - name: Make Cilium CLI executable
           file:
             path: /usr/local/bin/cilium
-            mode: '0755'
+            mode: "0755"
             state: file
           when: cilium_cli_version is defined and cilium_cli_version | trim | length > 0
 
@@ -761,7 +769,7 @@
                 blocks:
                   - start: "{{ LB_IP_RANGE_START }}"
                     stop: "{{ LB_IP_RANGE_STOP }}"
-            mode: '0644'
+            mode: "0644"
 
         - name: Apply CiliumLoadBalancerIPPool configuration
           command: kubectl apply -f /root/lb-config.yaml
@@ -836,6 +844,117 @@
           retries: 5
           delay: 30
       when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
+
+    - name: Install and configure Zot OCI registry
+      block:
+        - name: Get latest Zot version
+          uri:
+            url: "https://api.github.com/repos/project-zot/zot/releases/latest"
+            return_content: yes
+          register: zot_release_info
+
+        - name: Set Zot version
+          set_fact:
+            # curl -s "https://api.github.com/repos/project-zot/zot/releases/latest" | jq -r ".tag_name"
+            zot_version: "{{ zot_release_info.json.tag_name }}"
+          when: zot_release_info is defined and zot_release_info.status == 200
+
+        - name: Download Zot binary
+          get_url:
+            url: "https://github.com/project-zot/zot/releases/download/{{ zot_version }}/zot-linux-amd64"
+            dest: /usr/bin/zot
+            mode: "0755"
+            owner: root
+            group: root
+          when: zot_version | trim | length > 0
+
+        - name: Create Zot configuration directory
+          file:
+            path: /etc/zot
+            state: directory
+            mode: "0755"
+            owner: root
+            group: root
+
+        - name: Create Zot storage directory
+          file:
+            path: /var/run/zot
+            state: directory
+            mode: "0755"
+            owner: root
+            group: root
+
+        - name: Create Zot systemd service
+          copy:
+            dest: /etc/systemd/system/zot.service
+            content: |
+              [Unit]
+              Description=OCI Distribution Registry
+              Documentation=https://zotregistry.dev/
+              After=network.target local-fs.target
+
+              [Service]
+              Type=simple
+              ExecStart=/usr/bin/zot serve /etc/zot/config.json
+              Restart=on-failure
+              LimitNOFILE=500000
+
+              [Install]
+              WantedBy=multi-user.target
+            mode: "0644"
+            owner: root
+            group: root
+
+        - name: Reload systemd daemon
+          systemd:
+            daemon_reload: yes
+
+        - name: Configure Zot
+          copy:
+            dest: /etc/zot/config.json
+            content: |
+              {
+                "distSpecVersion": "1.1.1",
+                "storage": {
+                  "rootDirectory": "/var/run/zot",
+                  "gc": true,
+                  "dedupe": true
+                },
+                "http": {
+                  "address": "0.0.0.0",
+                  "port": "8042"
+                },
+                "extensions": {
+                  "search": {
+                    "enable": true,
+                    "cve": {
+                      "updateInterval": "24h"
+                    }
+                  },
+                  "scrub": {
+                    "enable": true,
+                    "interval": "24h"
+                  },
+                  "ui": {
+                    "enable": true
+                  }
+                },
+                "log": {
+                  "level": "info"
+                }
+              }
+            mode: "0644"
+            owner: root
+            group: root
+          notify: Restart zot
+
+        - name: Enable Zot service
+          systemd:
+            name: zot
+            enabled: yes
+      when:
+        - INSTALL_ZOT | default(false) | bool
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     - name: Mask unnecessary systemd units
       systemd:

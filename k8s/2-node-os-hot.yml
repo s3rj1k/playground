@@ -267,7 +267,7 @@ resources:
 
             runcmd:
               - |
-                apt-get update && apt-get install -y ansible git python3-jmespath || true
+                apt-get update && apt-get install -y ansible git || true
 
                 ansible-pull -U "https://github.com/s3rj1k/playground.git" \
                   %ansible_playbook% \
@@ -329,7 +329,7 @@ resources:
 
             runcmd:
               - |
-                apt-get update && apt-get install -y ansible git jq python3-jmespath || true
+                apt-get update && apt-get install -y ansible git jq || true
 
                 WORKER_DATA=$(cat /tmp/worker_data.json | jq -r '."1"')
                 rm -f /tmp/worker_data.json
