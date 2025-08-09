@@ -10,7 +10,7 @@
 
 *Build (force, autologin) RAW image:*
 
-    mkosi --force build --autologin
+    mkosi --force build --autologin=true
 
 *Convert RAW image to QCOW2:*
 
