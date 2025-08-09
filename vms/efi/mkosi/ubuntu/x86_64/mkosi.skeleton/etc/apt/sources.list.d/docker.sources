@@ -1,9 +1,9 @@
 # wget -O /etc/apt/keyrings/docker.asc https://download.docker.com/linux/ubuntu/gpg && chmod 0644 /etc/apt/keyrings/docker.asc
 X-Repolib-Name: docker
 Types: deb
-URIs: https://download.docker.com/linux/debian
+URIs: https://download.docker.com/linux/ubuntu
 Signed-By: /etc/apt/keyrings/docker.asc
-Suites: bookworm
+Suites: noble
 Architectures: amd64
 Components: stable
 Enabled: yes
