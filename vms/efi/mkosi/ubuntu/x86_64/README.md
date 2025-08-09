@@ -16,7 +16,7 @@
 
 *Build (force, autologin) RAW image:*
 
-    mkosi --force build --autologin
+    mkosi --force build --autologin=true
 
 *Convert RAW image to QCOW2:*
 
@@ -36,7 +36,7 @@
 
 *Run nspawn directory image:*
 
-    sudo systemd-nspawn --directory=image.vm --network-macvlan=eth0
+    systemd-nspawn --boot --directory=image.vm [--network-macvlan=eth0 | --network-veth]
 
 *Run RAW image using qemu:*
 
