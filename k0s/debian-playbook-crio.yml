@@ -12,11 +12,11 @@
   gather_facts: true
   ignore_errors: false
   vars:
-    K0S_MAJOR_MINOR_VERSION: "1.32"
+    K0S_MAJOR_MINOR_VERSION: "1.33"
     ENABLE_KONNECTIVITY: false
     ENABLE_DYNAMIC_CONFIG: false
     INSTALL_ZOT: false
-    CRIO_VERSION: "v1.32"
+    CRIO_VERSION: "v1.33"
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
     REGISTRY_MIRROR: ""
