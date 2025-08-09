@@ -1,5 +1,11 @@
 **Kubernetes OS Image.**
 
+*Install mkosi:*
+
+    pipx install git+https://github.com/systemd/mkosi.git
+    export PATH="$HOME/.local/bin:$PATH"
+    mkosi --version
+
 *Build RAW image:*
 
     mkosi build
@@ -23,6 +29,14 @@
 *Build (force) OCI directory layout image:*
 
     mkosi --force --format=oci build
+
+*Build nspawn directory image:*
+
+    mkosi --format=directory build
+
+*Run nspawn directory image:*
+
+    sudo systemd-nspawn --directory=image.vm --network-macvlan=eth0
 
 *Run RAW image using qemu:*
 
