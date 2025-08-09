@@ -10,15 +10,15 @@
 
 *Build (force, autologin) RAW image:*
 
-    mkosi --force --autologin build
+    mkosi --force build --autologin
 
 *Convert RAW image to QCOW2:*
 
-    qemu-img convert -f raw -O qcow2 -c os-image.vm.raw os-image.vm.qcow2
+    qemu-img convert -f raw -O qcow2 -c image.vm.raw image.vm.qcow2
 
 *Convert RAW image to VDI:*
 
-    VBoxManage convertfromraw os-image.vm.raw --format vdi os-image.vm.vdi
+    VBoxManage convertfromraw image.vm.raw --format vdi image.vm.vdi
 
 *Build (force) OCI directory layout image:*
 
