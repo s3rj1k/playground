@@ -579,11 +579,17 @@
             - k8s_releases_filtered is defined
             - k8s_releases_filtered | trim | length == 0
 
+        - name: Create kubeadm configuration directory
+          file:
+            path: /etc/kubeadm
+            state: directory
+            mode: "0755"
+
         - name: Create kubeadm configuration file
           # FeatureGates:
           #  - https://kubernetes.io/docs/tasks/configure-pod-container/image-volumes/
           copy:
-            dest: /root/kubeadm-config.yaml
+            dest: /etc/kubeadm/init.yaml
             content: |
               ---
               apiVersion: kubeadm.k8s.io/v1beta4
@@ -635,7 +641,7 @@
           when: kubectl_get_nodes.rc != 0
 
         - name: Initialize the Kubernetes Control Plane
-          command: kubeadm init --config=/root/kubeadm-config.yaml
+          command: kubeadm init --config=/etc/kubeadm/init.yaml
           args:
             creates: /etc/kubernetes/admin.conf
           environment:

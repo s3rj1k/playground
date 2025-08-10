@@ -1,9 +1,3 @@
-# Kubeadm initialization configuration for Kubernetes control plane
-#
-# To initialize the control plane, run:
-#  - kubeadm init --config /etc/kubeadm/init.yaml
-#  - kubectl --kubeconfig /etc/kubernetes/admin.conf taint nodes --all node-role.kubernetes.io/control-plane-
-
 ---
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: InitConfiguration

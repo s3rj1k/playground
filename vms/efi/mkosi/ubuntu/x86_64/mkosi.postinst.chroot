@@ -26,6 +26,7 @@ systemctl mask systemd-userdbd.service
 systemctl mask systemd-userdbd.socket
 systemctl mask ufw.service
 systemctl mask docker.service
+systemctl mask containerd.service
 
 # Enable systemd services
 systemctl enable crio.service
