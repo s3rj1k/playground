@@ -111,6 +111,12 @@ apt-mark hold kubelet kubeadm
 # Save Kubelet version
 kubelet --version | awk '{print $2}' | tee /kubelet.version
 
+# Replace version template in kubeadm config
+if [ -f /etc/kubeadm/init.yaml ]; then
+	KUBE_VERSION=$(cat /kubelet.version)
+	sed -i "s|{{ version }}|$KUBE_VERSION|g" /etc/kubeadm/init.yaml
+fi
+
 # Clean apt cache
 rm -vrf /var/lib/apt/lists /var/cache/apt
 apt clean
