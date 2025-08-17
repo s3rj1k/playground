@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
 # Tinkerbell Lab Setup Script
 #
 # Lint: shfmt -w -s -ci -sr -kp -fn tinkerbell-lab.sh

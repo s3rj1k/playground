@@ -3,10 +3,10 @@
 FROM alpine:latest AS downloader
 
 RUN apk add --no-cache \
-        curl \
-        libarchive-tools \
-        tar \
-        xz
+    curl \
+    libarchive-tools \
+    tar \
+    xz
 
 RUN mkdir -p /rootfs && \
     curl -L http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz | bsdtar -xpf - -C /rootfs
@@ -33,25 +33,25 @@ RUN echo "Server = http://mirror.archlinuxarm.org/\$arch/\$repo" > /etc/pacman.d
 
 RUN pacman -Syy --noconfirm && \
     pacman -Rns --noconfirm \
-        dhcpcd \
-        netctl \
-        openresolv \
-        vi \
+    dhcpcd \
+    netctl \
+    openresolv \
+    vi \
     && \
     pacman -Rndd --noconfirm \
-        iptables \
+    iptables \
     && \
     pacman -S --noconfirm \
-        iptables-nft \
+    iptables-nft \
     && \
     pacman -Syu --noconfirm \
-        avahi \
-        docker \
-        docker-buildx \
-        docker-compose \
-        iptables-nft \
-        nano \
-        openssh \
+    avahi \
+    docker \
+    docker-buildx \
+    docker-compose \
+    iptables-nft \
+    nano \
+    openssh \
     && \
     pacman -Scc --noconfirm
 
@@ -82,8 +82,8 @@ RUN rm -vf /etc/locale.gen.pacnew
 FROM upgrade AS yay_builder
 
 RUN pacman -Syu --noconfirm \
-        base-devel \
-        git \
+    base-devel \
+    git \
     && \
     useradd -m makepkg_user
 

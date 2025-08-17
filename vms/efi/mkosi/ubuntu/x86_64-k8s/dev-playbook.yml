@@ -1,7 +1,7 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: MIT
 
-# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git vms/efi/mkosi/ubuntu/x86_64/dev-playbook.yml
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git vms/efi/mkosi/ubuntu/x86_64-k8s/dev-playbook.yml
 
 ---
 - name: Setup development environment on AMD64
@@ -110,7 +110,7 @@
           ansible.builtin.file:
             path: /etc/apt/keyrings
             state: directory
-            mode: '0755'
+            mode: "0755"
 
         # Note: `ansible.builtin.deb822_repository` requires Ansible 2.15+
 
@@ -118,7 +118,7 @@
           ansible.builtin.get_url:
             url: "https://download.docker.com/linux/ubuntu/gpg"
             dest: "/etc/apt/keyrings/docker.asc"
-            mode: '0644'
+            mode: "0644"
 
         - name: Create Docker repository file
           ansible.builtin.copy:
@@ -132,7 +132,7 @@
               Architectures: amd64
               Components: stable
               Enabled: yes
-            mode: '0644'
+            mode: "0644"
 
         - name: Install all required packages
           apt:
@@ -190,7 +190,7 @@
           get_url:
             url: "https://go.dev/dl/{{ version }}.linux-amd64.tar.gz"
             dest: /tmp/go.tar.gz
-            mode: '0644'
+            mode: "0644"
           when: version | trim | length > 0
 
         - name: Remove existing Go installation
@@ -213,14 +213,14 @@
               export GOROOT=/usr/local/go
               export GOPATH=$HOME/go
               export PATH=$GOROOT/bin:$GOPATH/bin:$PATH
-            mode: '0644'
+            mode: "0644"
           when: version | trim | length > 0
 
         - name: Create GOPATH directory
           file:
             path: /root/go
             state: directory
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
 
         - name: Remove temporary files
@@ -252,7 +252,7 @@
           get_url:
             url: "https://kind.sigs.k8s.io/dl/{{ version }}/kind-linux-amd64"
             dest: /usr/local/bin/kind
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
 
     - name: Install kubectl
@@ -273,7 +273,7 @@
           get_url:
             url: "https://dl.k8s.io/release/{{ version }}/bin/linux/amd64/kubectl"
             dest: /usr/local/bin/kubectl
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
 
     - name: Install Krew
@@ -294,7 +294,7 @@
           get_url:
             url: "https://github.com/kubernetes-sigs/krew/releases/download/{{ version }}/krew-linux_amd64.tar.gz"
             dest: /tmp/krew.tar.gz
-            mode: '0644'
+            mode: "0644"
           when: version | trim | length > 0
 
         - name: Extract binary
@@ -319,14 +319,14 @@
             content: |
               export KREW_ROOT=/opt/krew
               export PATH="${KREW_ROOT}/bin:$PATH"
-            mode: '0644'
+            mode: "0644"
           when: version | trim | length > 0
 
         - name: Create directories
           file:
             path: "{{ item }}"
             state: directory
-            mode: '0755'
+            mode: "0755"
             owner: root
             group: root
           loop:
@@ -361,7 +361,7 @@
           get_url:
             url: "https://get.helm.sh/helm-{{ version }}-linux-amd64.tar.gz"
             dest: /tmp/helm.tar.gz
-            mode: '0644'
+            mode: "0644"
           when: version | trim | length > 0
 
         - name: Extract binary
@@ -375,7 +375,7 @@
           copy:
             src: /tmp/linux-amd64/helm
             dest: /usr/local/bin/helm
-            mode: '0755'
+            mode: "0755"
             remote_src: yes
           when: version | trim | length > 0
 
@@ -405,7 +405,7 @@
           get_url:
             url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ version }}/clusterctl-linux-amd64"
             dest: /usr/local/bin/clusterctl
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
 
     - name: Install ORAS
@@ -426,14 +426,14 @@
           get_url:
             url: "https://github.com/oras-project/oras/releases/download/{{ version }}/oras_{{ version | replace('v', '') }}_linux_amd64.tar.gz"
             dest: /tmp/oras.tar.gz
-            mode: '0644'
+            mode: "0644"
           when: version | trim | length > 0
 
         - name: Create temporary extraction directory
           file:
             path: /tmp/oras-extract
             state: directory
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
 
         - name: Extract binary
@@ -447,7 +447,7 @@
           copy:
             src: /tmp/oras-extract/oras
             dest: /usr/local/bin/oras
-            mode: '0755'
+            mode: "0755"
             remote_src: yes
           when: version | trim | length > 0
 
@@ -477,14 +477,14 @@
           get_url:
             url: "https://github.com/go-task/task/releases/download/{{ version }}/task_linux_amd64.tar.gz"
             dest: /tmp/task.tar.gz
-            mode: '0644'
+            mode: "0644"
           when: version | trim | length > 0
 
         - name: Create temporary extraction directory
           file:
             path: /tmp/task-extract
             state: directory
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
 
         - name: Extract binary
@@ -498,7 +498,7 @@
           copy:
             src: /tmp/task-extract/task
             dest: /usr/local/bin/task
-            mode: '0755'
+            mode: "0755"
             remote_src: yes
           when: version | trim | length > 0
 
@@ -536,7 +536,7 @@
           get_url:
             url: "https://github.com/mikefarah/yq/releases/download/{{ version }}/yq_linux_amd64"
             dest: /usr/local/bin/yq
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
 
     - name: Install envsubst
@@ -557,14 +557,14 @@
           get_url:
             url: https://github.com/a8m/envsubst/releases/download/{{ version }}/envsubst-Linux-x86_64
             dest: /tmp/envsubst
-            mode: '0755'
+            mode: "0755"
           when: version | trim | length > 0
 
         - name: Install envsubst binary ({{ version }})
           copy:
             src: /tmp/envsubst
             dest: /usr/local/bin/envsubst
-            mode: '0755'
+            mode: "0755"
             remote_src: yes
             owner: root
             group: root
@@ -581,18 +581,18 @@
           file:
             path: /etc/docker
             state: directory
-            mode: '0755'
+            mode: "0755"
 
         - name: Ensure directory for systemd-resolved config exists
           file:
             path: /etc/systemd/resolved.conf.d/
             state: directory
-            mode: '0755'
+            mode: "0755"
 
         - name: Set Docker daemon configuration
           copy:
             dest: /etc/docker/daemon.json
-            mode: '0644'
+            mode: "0644"
             content: |
               {
                 "default-address-pools": [
@@ -642,7 +642,7 @@
               LLMNR=no
 
               ReadEtcHosts=yes
-            mode: '0644'
+            mode: "0644"
           notify: Restart systemd-resolved
 
         - name: Enable systemd-resolved service

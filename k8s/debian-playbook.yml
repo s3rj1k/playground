@@ -3,6 +3,7 @@
 
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git k8s/debian-playbook.yml
 # ref: https://philprime.dev/guides/building-a-production-ready-kubernetes-cluster-from-scratch/lesson-8
+
 ---
 - name: Kubernetes (k8s) on Debian AMD64
   hosts: localhost

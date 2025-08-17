@@ -118,9 +118,9 @@ if [ -f /etc/kubeadm/init.yaml ]; then
 	sed -i "s|{{ version }}|$KUBE_VERSION|g" /etc/kubeadm/init.yaml
 fi
 
+# Prepare locale
+locale-gen
+
 # Clean apt cache
 rm -vrf /var/lib/apt/lists /var/cache/apt
 apt clean
-
-# Prepare locale
-locale-gen

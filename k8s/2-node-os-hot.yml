@@ -115,7 +115,7 @@ parameters:
 
 resources:
   network:
-    type: 'OS::Neutron::Net'
+    type: "OS::Neutron::Net"
     properties:
       name:
         str_replace:
@@ -129,7 +129,7 @@ resources:
         - get_param: availability_zone
 
   subnet:
-    type: 'OS::Neutron::Subnet'
+    type: "OS::Neutron::Subnet"
     properties:
       name:
         str_replace:
@@ -150,7 +150,7 @@ resources:
             get_param: allocation_pool_stop
 
   router:
-    type: 'OS::Neutron::Router'
+    type: "OS::Neutron::Router"
     properties:
       name:
         str_replace:
@@ -164,7 +164,7 @@ resources:
           get_param: external_network
 
   router_interface:
-    type: 'OS::Neutron::RouterInterface'
+    type: "OS::Neutron::RouterInterface"
     properties:
       router_id:
         get_resource: router
@@ -172,7 +172,7 @@ resources:
         get_resource: subnet
 
   port_controller:
-    type: 'OS::Neutron::Port'
+    type: "OS::Neutron::Port"
     properties:
       name:
         str_replace:
@@ -191,7 +191,7 @@ resources:
             get_param: controller_ip
 
   port_worker_node_1:
-    type: 'OS::Neutron::Port'
+    type: "OS::Neutron::Port"
     properties:
       name:
         str_replace:
@@ -210,7 +210,7 @@ resources:
             get_param: worker_node_1_ip
 
   floating_ip_controller:
-    type: 'OS::Neutron::FloatingIP'
+    type: "OS::Neutron::FloatingIP"
     properties:
       floating_network:
         get_param: external_network
@@ -218,7 +218,7 @@ resources:
         get_resource: port_controller
 
   floating_ip_worker_node_1:
-    type: 'OS::Neutron::FloatingIP'
+    type: "OS::Neutron::FloatingIP"
     properties:
       floating_network:
         get_param: external_network
@@ -226,27 +226,27 @@ resources:
         get_resource: port_worker_node_1
 
   controller_wait_handle:
-    type: 'OS::Heat::WaitConditionHandle'
+    type: "OS::Heat::WaitConditionHandle"
 
   controller_wait_condition:
-    type: 'OS::Heat::WaitCondition'
+    type: "OS::Heat::WaitCondition"
     properties:
       handle:
         get_resource: controller_wait_handle
       timeout: 1800
 
   worker_node_1_wait_handle:
-    type: 'OS::Heat::WaitConditionHandle'
+    type: "OS::Heat::WaitConditionHandle"
 
   worker_node_1_wait_condition:
-    type: 'OS::Heat::WaitCondition'
+    type: "OS::Heat::WaitCondition"
     properties:
       handle:
         get_resource: worker_node_1_wait_handle
       timeout: 1800
 
   controller_user_data:
-    type: 'OS::Heat::Value'
+    type: "OS::Heat::Value"
     properties:
       value:
         str_replace:
@@ -287,23 +287,23 @@ resources:
                   exit 1
                 fi
           params:
-            '%ssh_keys%':
+            "%ssh_keys%":
               get_param: ssh_pub_key
-            '%ansible_playbook%':
+            "%ansible_playbook%":
               get_param: ansible_playbook
-            '%registry_mirror%':
+            "%registry_mirror%":
               get_param: registry_mirror
-            '%lb_ip_range_start%':
+            "%lb_ip_range_start%":
               get_param: allocation_pool_start
-            '%lb_ip_range_stop%':
+            "%lb_ip_range_stop%":
               get_param: allocation_pool_stop
-            '%wc_notify%':
+            "%wc_notify%":
               get_attr:
                 - controller_wait_handle
                 - curl_cli
 
   worker_node_1_user_data:
-    type: 'OS::Heat::Value'
+    type: "OS::Heat::Value"
     properties:
       value:
         str_replace:
@@ -350,29 +350,29 @@ resources:
                   exit 1
                 fi
           params:
-            '%ssh_keys%':
+            "%ssh_keys%":
               get_param: ssh_pub_key
-            '%ansible_playbook%':
+            "%ansible_playbook%":
               get_param: ansible_playbook
-            '%registry_mirror%':
+            "%registry_mirror%":
               get_param: registry_mirror
-            '%worker_data%':
+            "%worker_data%":
               get_attr:
                 - controller_wait_condition
                 - data
-            '%wc_notify%':
+            "%wc_notify%":
               get_attr:
                 - worker_node_1_wait_handle
                 - curl_cli
 
   controller:
-    type: 'OS::Nova::Server'
+    type: "OS::Nova::Server"
     properties:
       name:
         str_replace:
-          template: '%prefix%-k8s-controller'
+          template: "%prefix%-k8s-controller"
           params:
-            '%prefix%':
+            "%prefix%":
               get_param: prefix
       availability_zone:
         get_param: availability_zone
@@ -396,14 +396,14 @@ resources:
           - value
 
   worker_node_1:
-    type: 'OS::Nova::Server'
+    type: "OS::Nova::Server"
     depends_on: controller_wait_condition
     properties:
       name:
         str_replace:
-          template: '%prefix%-k8s-worker-node-1'
+          template: "%prefix%-k8s-worker-node-1"
           params:
-            '%prefix%':
+            "%prefix%":
               get_param: prefix
       availability_zone:
         get_param: availability_zone

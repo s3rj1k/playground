@@ -1,7 +1,10 @@
 #!/bin/bash
 
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
 # Based on `capt` from https://github.com/tinkerbell/playground.git
-# clone: git clone https://github.com/s3rj1k/playground.git && cd k8s-playground/capt
+# clone: git clone https://github.com/s3rj1k/playground.git && cd playground/tinkerbell/capt
 
 # code formatter: shfmt -s -w -sr -kp -fn -bn auto.sh
 # commit to gist: git commit --allow-empty-message -S -am ''
@@ -37,7 +40,7 @@ export KUBEVIP_VERSION=0.8.7
 export CLUSTER_NAME=capt
 export NAMESPACE="tink"
 
-export OS_REGISTRY=ghcr.io/s3rj1k/k8s-playground
+export OS_REGISTRY=ghcr.io/s3rj1k/playground
 export OS_DISTRO=ubuntu
 export VERSIONS_OS=20.04
 export OS_VERSION=$(echo $VERSIONS_OS | sed 's/\.//')
