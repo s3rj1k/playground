@@ -557,118 +557,73 @@
             mode: "0755"
           when: k0s_version is defined and k0s_version | trim | length > 0
 
-        - name: Create k0s configuration script
-          copy:
-            dest: /root/k0s.py
-            content: |
-              #!/usr/bin/python3
-
-              import os
-              import subprocess
-              import sys
-              import yaml
-
-              # Path to k0s config file
-              k0s_config_path = '/root/k0s.yaml'
-
-              # Exit early if config already exists
-              if os.path.exists(k0s_config_path):
-                  sys.exit(0)
-
-              # Get registry_mirror from environment variable
-              registry_mirror = os.environ.get('REGISTRY_MIRROR', '')
-
-              # Get the base k0s configuration
-              k0s_process = subprocess.run(
-                  ['k0s', 'config', 'create'], capture_output=True, text=True, check=True
-              )
-              config = yaml.safe_load(k0s_process.stdout)
-
-              # Set repository if registry_mirror is provided
-              if registry_mirror and len(registry_mirror.strip()) > 0:
-                  if 'images' not in config['spec']:
-                      config['spec']['images'] = {}
-                  config['spec']['images']['repository'] = registry_mirror
-
-              # Disable telemetry
-              if 'telemetry' not in config['spec']:
-                  config['spec']['telemetry'] = {}
-
-              config['spec']['telemetry']['enabled'] = False
-
-              # Set network provider to Calico with configuration
-              if 'network' not in config['spec']:
-                  config['spec']['network'] = {}
-              config['spec']['network']['provider'] = 'calico'
-              config['spec']['network']['calico'] = {
-                  'ipAutodetectionMethod': 'can-reach=8.8.8.8',
-                  'envVars': {
-                      'FELIX_IGNORELOOSERPF': 'true'
-                  }
-              }
-
-              # Set feature gates
-              #  - https://kubernetes.io/docs/tasks/configure-pod-container/image-volumes/
-              config['spec']['featureGates'] = [{'name': 'ImageVolume', 'enabled': True}]
-
-              # Add Helm extension configuration
-              if 'extensions' not in config['spec']:
-                  config['spec']['extensions'] = {}
-
-              if 'helm' not in config['spec']['extensions']:
-                  config['spec']['extensions']['helm'] = {}
-
-              if 'repositories' not in config['spec']['extensions']['helm']:
-                  config['spec']['extensions']['helm']['repositories'] = []
-
-              if 'charts' not in config['spec']['extensions']['helm']:
-                  config['spec']['extensions']['helm']['charts'] = []
-
-              # Add MetalLB repository
-              metallb_repo = {
-                  'name': 'metallb',
-                  'url': 'https://metallb.github.io/metallb'
-              }
-              config['spec']['extensions']['helm']['repositories'].append(metallb_repo)
-
-              # Add containeroo repository
-              containeroo_repo = {
-                  'name': 'containeroo',
-                  'url': 'https://charts.containeroo.ch'
-              }
-              config['spec']['extensions']['helm']['repositories'].append(containeroo_repo)
-
-              # Add MetalLB chart
-              metallb_chart = {
-                  'name': 'metallb',
-                  'chartname': 'metallb/metallb',
-                  'namespace': 'metallb-system'
-              }
-              config['spec']['extensions']['helm']['charts'].append(metallb_chart)
-
-              # Add local-path-storage chart
-              lpstorage_chart = {
-                  'name': 'local-path-storage',
-                  'chartname': 'containeroo/local-path-provisioner',
-                  'namespace': 'local-path-storage',
-                  'values': yaml.dump({
-                      'storageClass': {
-                          'defaultClass': True
-                      }
-                  })
-              }
-              config['spec']['extensions']['helm']['charts'].append(lpstorage_chart)
-
-              # Write the modified config to file
-              with open(k0s_config_path, 'w') as f:
-                  yaml.dump(config, f, default_flow_style=False)
-            mode: "0755"
-
-        - name: Generate k0s configuration
-          environment:
-            REGISTRY_MIRROR: "{{ REGISTRY_MIRROR | default('') }}"
-          shell: /root/k0s.py
-          changed_when: false
+        - name: Create k0s configuration file
+          blockinfile:
+            path: /root/k0s.yaml
+            create: yes
+            block: |
+              apiVersion: k0s.k0sproject.io/v1beta1
+              kind: ClusterConfig
+              metadata:
+                name: k0s
+                namespace: kube-system
+              spec:
+                telemetry:
+                  enabled: false
+              {% if REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0 %}
+                images:
+                  repository: {{ REGISTRY_MIRROR }}
+              {% endif %}
+                storage:
+                  type: etcd
+                network:
+                  provider: calico
+                  dualStack:
+                    enabled: false
+                  calico:
+                    mode: vxlan
+                    mtu: 1400
+                    overlay: Always
+                    ipAutodetectionMethod: can-reach=8.8.8.8
+                    envVars:
+                      FELIX_IGNORELOOSERPF: "true"
+                      FELIX_ALLOWVXLANPACKETSFROMWORKLOADS: "true"
+                featureGates:
+                  - name: ImageVolume
+                    enabled: true
+                extensions:
+                  helm:
+                    charts:
+                    - chartname: metallb/metallb
+                      name: metallb
+                      namespace: metallb-system
+                    - chartname: containeroo/local-path-provisioner
+                      name: local-path-storage
+                      namespace: local-path-storage
+                      values: |
+                        storageClass:
+                          defaultClass: true
+                    repositories:
+                    - name: metallb
+                      url: https://metallb.github.io/metallb
+                    - name: containeroo
+                      url: https://charts.containeroo.ch
+                workerProfiles:
+                  - name: numa
+                    values:
+                      topologyManagerPolicy: "best-effort"
+                      cpuManagerPolicy: "static"
+                      cpuManagerPolicyOptions:
+                        full-pcpus-only: "true"
+                        distribute-cpus-across-numa: "true"
+                      reservedSystemCPUs: "0"
+                      reservedMemory:
+                        - limits:
+                            memory: 2Gi
+                          numaNode: 0
+                      kubeReservedCgroup: ""
+            marker: ""
+            mode: "0644"
 
         - name: Create systemd override directory for k0scontroller
           file:
@@ -714,10 +669,10 @@
 
               DISABLED_COMPONENTS=""
               if [ "${ENABLE_KONNECTIVITY:-false}" = "false" ] || [ -z "${ENABLE_KONNECTIVITY}" ]; then
-                DISABLED_COMPONENTS="--disable-components konnectivity-server"
+                DISABLED_COMPONENTS="--disable-components=konnectivity-server"
               fi
 
-              k0s install controller -c /root/k0s.yaml $DYNAMIC_CONFIG_FLAG $DISABLED_COMPONENTS --enable-worker --no-taints --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
+              k0s install controller -c /root/k0s.yaml $DYNAMIC_CONFIG_FLAG $DISABLED_COMPONENTS --enable-worker --no-taints --profile numa --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
             fi
           args:
             executable: /bin/bash
@@ -736,7 +691,7 @@
         - name: Install k0s as a Worker with token
           shell: |
             if [ ! -f /etc/systemd/system/k0sworker.service ]; then
-              k0s install worker --token-file=/root/k0s-token --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
+              k0s install worker --token-file=/root/k0s-token --profile numa --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
             fi
           args:
             executable: /bin/bash
