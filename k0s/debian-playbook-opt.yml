@@ -275,6 +275,34 @@
           when: version is defined
       when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
+    - name: Install Cilium CLI
+      block:
+        - name: Get Cilium CLI latest version
+          uri:
+            url: "https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt"
+            return_content: yes
+          register: cilium_version_info
+
+        - name: Set Cilium CLI version
+          set_fact:
+            cilium_version: "{{ cilium_version_info.content | trim }}"
+          when: cilium_version_info is defined and cilium_version_info.status == 200
+
+        - name: Download Cilium CLI
+          get_url:
+            url: "https://github.com/cilium/cilium-cli/releases/download/{{ cilium_version }}/cilium-linux-amd64.tar.gz"
+            dest: "/tmp/cilium-linux-amd64.tar.gz"
+          when: cilium_version is defined
+
+        - name: Extract Cilium CLI to /usr/local/bin
+          unarchive:
+            src: "/tmp/cilium-linux-amd64.tar.gz"
+            dest: "/usr/local/bin"
+            remote_src: yes
+            mode: "0755"
+          when: cilium_version is defined
+      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+
     - name: Configure and generate locale
       block:
         - name: Set locale in configuration
@@ -586,7 +614,7 @@
                 storage:
                   type: etcd
                 network:
-                  provider: calico
+                  provider: custom
                   dualStack:
                     enabled: false
                   calico:
@@ -600,15 +628,6 @@
                 featureGates:
                   - name: ImageVolume
                     enabled: true
-                extensions:
-                  helm:
-                    charts:
-                    - chartname: metallb/metallb
-                      name: metallb
-                      namespace: metallb-system
-                    repositories:
-                    - name: metallb
-                      url: https://metallb.github.io/metallb
                 workerProfiles:
                   - name: numa
                     values:
@@ -722,6 +741,73 @@
             dest: /usr/local/bin/kubectl
             state: link
 
+    - name: Install and configure Cilium CNI
+      block:
+        - name: Install Cilium CNI with L2 announcements
+          shell: |
+            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
+            cilium install --set l2announcements.enabled=true --set devices='{eth+,ens+,eno+,enp+}'
+          args:
+            executable: /bin/bash
+          register: cilium_install_result
+          until: cilium_install_result.rc == 0
+          retries: 40
+          delay: 60
+
+        - name: Wait for Cilium to be ready
+          shell: |
+            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
+            cilium status --wait
+          args:
+            executable: /bin/bash
+          register: cilium_status_result
+          until: cilium_status_result.rc == 0
+          retries: 40
+          delay: 60
+
+        - name: Wait for k0s cluster to be ready
+          shell: |
+            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
+            k0s kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          args:
+            executable: /bin/bash
+          register: cluster_ready
+          until: cluster_ready.rc == 0
+          retries: 10
+          delay: 30
+      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+
+    - name: Configure Cilium Load Balancer
+      block:
+        - name: Create Cilium LoadBalancer IP Pool
+          copy:
+            dest: /root/cilium-lb-config.yaml
+            content: |
+              apiVersion: "cilium.io/v2"
+              kind: CiliumLoadBalancerIPPool
+              metadata:
+                name: "default-pool"
+              spec:
+                blocks:
+                - start: "{{ LB_IP_RANGE_START }}"
+                  stop: "{{ LB_IP_RANGE_STOP }}"
+            mode: "0644"
+
+        - name: Apply Cilium LoadBalancer configuration
+          shell: |
+            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
+            k0s kubectl apply -f /root/cilium-lb-config.yaml
+          args:
+            executable: /bin/bash
+          register: cilium_lb_apply_result
+          until: cilium_lb_apply_result.rc == 0
+          retries: 5
+          delay: 30
+      when:
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+        - LB_IP_RANGE_START | default("") | length > 0
+        - LB_IP_RANGE_STOP | default("") | length > 0
+
     - name: Deploy local-path-provisioner via k0s manifests
       block:
         - name: Get latest local-path-provisioner version
@@ -759,43 +845,6 @@
                 annotations:
                   storageclass.kubernetes.io/is-default-class: "true"
       when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-    - name: Configure MetalLB
-      block:
-        - name: Create MetalLB IPAddressPool and L2Advertisement
-          copy:
-            dest: /root/metallb-config.yaml
-            content: |
-              apiVersion: metallb.io/v1beta1
-              kind: IPAddressPool
-              metadata:
-                name: default-pool
-                namespace: metallb-system
-              spec:
-                addresses:
-                  - {{ LB_IP_RANGE_START }}-{{ LB_IP_RANGE_STOP }}
-              ---
-              apiVersion: metallb.io/v1beta1
-              kind: L2Advertisement
-              metadata:
-                name: default-l2adv
-                namespace: metallb-system
-            mode: "0644"
-
-        - name: Apply MetalLB configuration
-          shell: |
-            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
-            k0s kubectl apply -f /root/metallb-config.yaml
-          args:
-            executable: /bin/bash
-          register: apply_result
-          until: apply_result.rc == 0
-          retries: 5
-          delay: 30
-      when:
-        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-        - LB_IP_RANGE_START | default("") | length > 0
-        - LB_IP_RANGE_STOP | default("") | length > 0
 
     - name: Install and configure Zot OCI registry
       block:
