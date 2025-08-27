@@ -10,8 +10,9 @@
 #
 # Refs:
 #   - https://github.com/tinkerbell/tinkerbell/blob/main/helm/tinkerbell/README.md
-#   - https://github.com/tinkerbell/tinkerbell/blob/main/docs/technical/rufio/README.md#job-api
+#   - https://github.com/tinkerbell/tinkerbell/blob/main/docs/technical/AUTO_DISCOVERY.md
 #   - https://github.com/tinkerbell/tinkerbell/blob/main/docs/technical/BOOT_MODES.md#customboot
+#   - https://github.com/tinkerbell/tinkerbell/blob/main/docs/technical/rufio/README.md#job-api
 #   - https://github.com/tinkerbell/playground/
 #
 
@@ -51,7 +52,7 @@ set_config()
 	KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 	IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"
 
-	# CNI Configuration (calico, kube-router)
+	# CNI Configuration (calico)
 	CNI_PROVIDER="${CNI_PROVIDER:-calico}"
 
 	# Tinkerbell Configuration
@@ -60,9 +61,9 @@ set_config()
 	NAMESPACE="tinkerbell"
 
 	# HookOS Configuration
-	HOOKOS_DOWNLOAD_URL="${HOOKOS_DOWNLOAD_URL:-https://github.com/tinkerbell/hook/releases/download/v0.11.1}"
+	HOOKOS_DOWNLOAD_URL="${HOOKOS_DOWNLOAD_URL:-https://github.com/tinkerbell/hook/releases/download/latest}"
 	# See: https://github.com/tinkerbell/tinkerbell/issues/300
-	HOOKOS_ISO_URL="${HOOKOS_DOWNLOAD_URL}/hook-latest-lts-x86_64-efi-initrd.iso"
+	HOOKOS_ISO_URL="${HOOKOS_DOWNLOAD_URL}/hook-x86_64-efi-initrd.iso"
 
 	# Template names
 	TEMPLATE_NAME="ubuntu-nokexec"
@@ -244,20 +245,6 @@ get_calico_version()
 	echo "Using Calico version: ${CALICO_VERSION}"
 }
 
-# Fetch the latest kube-router version
-get_kube_router_version()
-{
-	echo -e "\nFetching latest kube-router version ..."
-	KUBE_ROUTER_VERSION=$(curl -s "https://api.github.com/repos/cloudnativelabs/kube-router/releases/latest" | jq -r ".tag_name")
-
-	if [ -z "$KUBE_ROUTER_VERSION" ] || [ "$KUBE_ROUTER_VERSION" = "null" ]; then
-		echo "Error: Failed to fetch kube-router version"
-		exit 1
-	fi
-
-	echo "Using kube-router version: ${KUBE_ROUTER_VERSION}"
-}
-
 # Create the Kind cluster
 create_kind_cluster()
 {
@@ -326,18 +313,6 @@ install_calico()
 	done
 
 	echo "Calico ${CALICO_VERSION} installed successfully"
-}
-
-# Install kube-router CNI
-install_kube_router()
-{
-	echo -e "\nInstalling kube-router ${KUBE_ROUTER_VERSION} ..."
-	until kubectl create -f "https://raw.githubusercontent.com/cloudnativelabs/kube-router/${KUBE_ROUTER_VERSION}/daemonset/kubeadm-kuberouter.yaml" &> /dev/null; do
-		echo "Waiting for cluster to be ready ..."
-		sleep 5
-	done
-
-	echo "kube-router ${KUBE_ROUTER_VERSION} installed successfully"
 }
 
 # Wait for nodes to be ready
@@ -418,6 +393,7 @@ install_tinkerbell()
 		--set "trustedProxies={${TRUSTED_PROXIES}}" \
 		--set "publicIP=$TINKERBELL_LB_IP" \
 		--set "artifactsFileServer=$TINKERBELL_ARTIFACTS_SERVER" \
+		--set "optional.hookos.enabled=true" \
 		--set "deployment.envs.smee.isoUpstreamURL=$HOOKOS_ISO_URL" \
 		--set "deployment.envs.smee.ipxeHttpScriptExtraKernelArgs={console=tty0,console=ttyS0\,115200n8,linuxkit.runc_console=1,linuxkit.runc_debug=1}" \
 		--set "deployment.envs.smee.osieURL=http://${TINKERBELL_LB_IP}:7171" \
@@ -952,9 +928,6 @@ main()
 	if [ "$CNI_PROVIDER" = "calico" ]; then
 		get_calico_version
 		install_calico
-	elif [ "$CNI_PROVIDER" = "kube-router" ]; then
-		get_kube_router_version
-		install_kube_router
 	else
 		echo "Error: Unsupported CNI provider: $CNI_PROVIDER"
 		exit 1

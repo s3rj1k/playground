@@ -181,6 +181,7 @@
               - python3-dev
               # Networking
               - ebtables
+              - ethtool
               - iproute2
               - socat
               # Docker and dependencies
