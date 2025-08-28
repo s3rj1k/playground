@@ -1,0 +1,235 @@
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git k0s/zot.yml
+
+---
+- name: Image Registry (zot) on Debian/Ubuntu AMD64
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  ignore_errors: false
+
+  pre_tasks:
+    - name: Check if system is supported
+      block:
+        - name: Check if distribution is Debian or Ubuntu
+          fail:
+            msg: "This playbook only supports Debian or Ubuntu distributions"
+          when: ansible_distribution not in ["Debian", "Ubuntu"]
+
+        - name: Check if architecture is AMD64
+          fail:
+            msg: "This playbook only supports AMD64 architecture"
+          when: ansible_architecture != "x86_64"
+
+        - name: Get OS version
+          debug:
+            msg: "Running on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+
+  handlers:
+    - name: Restart zot
+      systemd:
+        name: zot
+        state: restarted
+        daemon_reload: yes
+      when: ansible_service_mgr == 'systemd'
+
+  tasks:
+    - name: Install and configure Zot OCI registry
+      block:
+        - name: Get latest Zot version
+          uri:
+            url: "https://api.github.com/repos/project-zot/zot/releases/latest"
+            return_content: yes
+          register: zot_release_info
+
+        - name: Set Zot version
+          set_fact:
+            # curl -s "https://api.github.com/repos/project-zot/zot/releases/latest" | jq -r ".tag_name"
+            zot_version: "{{ zot_release_info.json.tag_name }}"
+          when: zot_release_info is defined and zot_release_info.status == 200
+
+        - name: Download Zot binary
+          get_url:
+            url: "https://github.com/project-zot/zot/releases/download/{{ zot_version }}/zot-linux-amd64"
+            dest: /usr/bin/zot
+            mode: "0755"
+            owner: root
+            group: root
+          when: zot_version is defined
+
+        - name: Create Zot configuration directory
+          file:
+            path: /etc/zot
+            state: directory
+            mode: "0755"
+            owner: root
+            group: root
+
+        - name: Create Zot storage directory
+          file:
+            path: /var/run/zot
+            state: directory
+            mode: "0755"
+            owner: root
+            group: root
+
+        - name: Create TLS certificate directory
+          file:
+            path: /etc/zot/certs
+            state: directory
+            mode: "0750"
+            owner: root
+            group: root
+
+        - name: Generate private key for TLS
+          openssl_privatekey:
+            path: /etc/zot/certs/zot.key
+            size: 2048
+            mode: "0600"
+            owner: root
+            group: root
+
+        - name: Generate certificate signing request
+          openssl_csr:
+            path: /etc/zot/certs/zot.csr
+            privatekey_path: /etc/zot/certs/zot.key
+            common_name: "{{ ansible_default_ipv4.address }}"
+            subject_alt_name:
+              - "IP:{{ ansible_default_ipv4.address }}"
+              - "DNS:{{ ansible_hostname }}"
+              - "DNS:localhost"
+              - "IP:127.0.0.1"
+
+        - name: Generate self-signed certificate
+          openssl_certificate:
+            path: /etc/zot/certs/zot.crt
+            privatekey_path: /etc/zot/certs/zot.key
+            csr_path: /etc/zot/certs/zot.csr
+            provider: selfsigned
+            selfsigned_not_after: "+365d"
+            mode: "0644"
+            owner: root
+            group: root
+
+        - name: Create Zot systemd service
+          copy:
+            dest: /etc/systemd/system/zot.service
+            content: |
+              [Unit]
+              Description=OCI Distribution Registry
+              Documentation=https://zotregistry.dev/
+              After=network.target local-fs.target
+
+              [Service]
+              Type=simple
+              ExecStart=/usr/bin/zot serve /etc/zot/config.json
+              Restart=on-failure
+              LimitNOFILE=500000
+
+              [Install]
+              WantedBy=multi-user.target
+            mode: "0644"
+            owner: root
+            group: root
+
+        - name: Reload systemd daemon
+          systemd:
+            daemon_reload: yes
+
+        - name: Install apache2-utils for htpasswd command
+          apt:
+            name: apache2-utils
+            state: present
+            update_cache: yes
+
+        - name: Generate random password for Zot
+          set_fact:
+            zot_password: "{{ lookup('password', '/dev/null length=16 chars=ascii_letters,digits') }}"
+
+        - name: Save Zot credentials to /root
+          copy:
+            dest: /root/zot-credentials.txt
+            content: |
+              Zot Registry Credentials
+              =======================
+              Username: admin
+              Password: {{ zot_password }}
+
+              Registry URL: https://{{ ansible_default_ipv4.address }}:8043
+            mode: "0600"
+            owner: root
+            group: root
+
+        - name: Create htpasswd file with generated password
+          shell: |
+            htpasswd -cbB /etc/zot/htpasswd admin "{{ zot_password }}"
+
+        - name: Set htpasswd file permissions
+          file:
+            path: /etc/zot/htpasswd
+            mode: "0600"
+            owner: root
+            group: root
+
+        - name: Configure Zot with HTTPS and anonymous reads
+          copy:
+            dest: /etc/zot/config.json
+            content: |
+              {
+                "distSpecVersion": "1.1.1",
+                "storage": {
+                  "rootDirectory": "/var/run/zot",
+                  "gc": true,
+                  "dedupe": true
+                },
+                "http": {
+                  "address": "0.0.0.0",
+                  "port": "8043",
+                  "tls": {
+                    "cert": "/etc/zot/certs/zot.crt",
+                    "key": "/etc/zot/certs/zot.key"
+                  },
+                  "auth": {
+                    "htpasswd": {
+                      "path": "/etc/zot/htpasswd"
+                    }
+                  },
+                  "accessControl": {
+                    "repositories": {
+                      "**": {
+                        "anonymousPolicy": ["read"]
+                      }
+                    }
+                  }
+                },
+                "extensions": {
+                  "search": {
+                    "enable": true,
+                    "cve": {
+                      "updateInterval": "24h"
+                    }
+                  },
+                  "scrub": {
+                    "enable": true,
+                    "interval": "72h"
+                  },
+                  "ui": {
+                    "enable": true
+                  }
+                },
+                "log": {
+                  "level": "info"
+                }
+              }
+            mode: "0644"
+            owner: root
+            group: root
+          notify: Restart zot
+
+        - name: Enable Zot service
+          systemd:
+            name: zot
+            enabled: yes
