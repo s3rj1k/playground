@@ -467,7 +467,7 @@
 
         - name: Create k0s configuration script
           copy:
-            dest: /root/k0s.py
+            dest: /etc/k0s/k0s.py
             content: |
               #!/usr/bin/python3
 
@@ -477,7 +477,7 @@
               import yaml
 
               # Path to k0s config file
-              k0s_config_path = '/root/k0s.yaml'
+              k0s_config_path = '/etc/k0s/k0s.yaml'
 
               # Exit early if config already exists
               if os.path.exists(k0s_config_path):
@@ -571,7 +571,7 @@
         - name: Generate k0s configuration
           environment:
             REGISTRY_MIRROR: "{{ REGISTRY_MIRROR | default('') }}"
-          shell: /root/k0s.py
+          shell: /etc/k0s/k0s.py
           changed_when: false
 
         - name: Create systemd override directory for k0scontroller
@@ -616,7 +616,7 @@
                 DYNAMIC_CONFIG_FLAG="--enable-dynamic-config"
               fi
 
-              k0s install controller -c /root/k0s.yaml $DYNAMIC_CONFIG_FLAG {{ K0S_EXTRA_FLAGS }} --enable-worker --no-taints --kubelet-root-dir=/var/lib/kubelet --verbose
+              k0s install controller -c /etc/k0s/k0s.yaml $DYNAMIC_CONFIG_FLAG {{ K0S_EXTRA_FLAGS }} --enable-worker --no-taints --kubelet-root-dir=/var/lib/kubelet --verbose
             fi
           args:
             executable: /bin/bash
@@ -627,14 +627,14 @@
         - name: Create Worker token file
           copy:
             content: "{{ WORKER_DATA }}"
-            dest: /root/k0s-token
+            dest: /etc/k0s/token
             mode: "0600"
           when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Install k0s as a Worker with token
           shell: |
             if [ ! -f /etc/systemd/system/k0sworker.service ]; then
-              k0s install worker --token-file=/root/k0s-token --kubelet-root-dir=/var/lib/kubelet --verbose
+              k0s install worker --token-file=/etc/k0s/token --kubelet-root-dir=/var/lib/kubelet --verbose
             fi
           args:
             executable: /bin/bash
@@ -702,7 +702,7 @@
       block:
         - name: Create MetalLB IPAddressPool and L2Advertisement
           copy:
-            dest: /root/metallb-config.yaml
+            dest: /etc/k0s/metallb-config.yaml
             content: |
               apiVersion: metallb.io/v1beta1
               kind: IPAddressPool
@@ -722,7 +722,7 @@
 
         - name: Apply MetalLB configuration
           shell: |
-            k0s kubectl apply -f /root/metallb-config.yaml
+            k0s kubectl apply -f /etc/k0s/metallb-config.yaml
           args:
             executable: /bin/bash
           register: apply_result

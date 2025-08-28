@@ -564,20 +564,20 @@
 
         - name: Create k0s configuration file
           blockinfile:
-            path: /root/k0s.yaml
+            path: /etc/k0s/k0s.yaml
             create: yes
             block: |
               # Manual k0s cluster recreation commands:
               #
               # k0s stop ; k0s reset --kubelet-root-dir=/var/lib/kubelet --debug
               #
-              # k0s install controller --enable-dynamic-config --disable-components=konnectivity-server --enable-worker --no-taints --profile numa --config /root/k0s.yaml --kubelet-root-dir=/var/lib/kubelet --debug
+              # k0s install controller --enable-dynamic-config --disable-components=konnectivity-server --enable-worker --no-taints --profile numa --config /etc/k0s/k0s.yaml --kubelet-root-dir=/var/lib/kubelet --debug
               # k0s start ; sleep 5 ; systemctl status k0scontroller ; cat /proc/$(pidof kubelet)/cmdline | tr -s '\0' '\n' ; cat /run/k0s/kubelet/config.yaml
               #
               # k0s token create --role=worker
               # k0s kubeconfig admin | base64 -w 0
               #
-              # k0s install worker --token-file=/root/k0s-token --profile numa --kubelet-root-dir=/var/lib/kubelet --debug
+              # k0s install worker --token-file=/etc/k0s/token --profile numa --kubelet-root-dir=/var/lib/kubelet --debug
               # k0s start ; sleep 5 ; systemctl status k0sworker ; cat /proc/$(pidof kubelet)/cmdline | tr -s '\0' '\n' ; cat /run/k0s/kubelet/config.yaml
 
               apiVersion: k0s.k0sproject.io/v1beta1
@@ -670,7 +670,7 @@
 
               DISABLED_COMPONENTS_FLAG="--disable-components=konnectivity-server"
 
-              k0s install controller -c /root/k0s.yaml $DYNAMIC_CONFIG_FLAG $DISABLED_COMPONENTS_FLAG --enable-worker --no-taints --profile numa --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
+              k0s install controller -c /etc/k0s/k0s.yaml $DYNAMIC_CONFIG_FLAG $DISABLED_COMPONENTS_FLAG --enable-worker --no-taints --profile numa --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
             fi
           args:
             executable: /bin/bash
@@ -681,14 +681,14 @@
         - name: Create Worker token file
           copy:
             content: "{{ WORKER_DATA }}"
-            dest: /root/k0s-token
+            dest: /etc/k0s/token
             mode: "0600"
           when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
         - name: Install k0s as a Worker with token
           shell: |
             if [ ! -f /etc/systemd/system/k0sworker.service ]; then
-              k0s install worker --token-file=/root/k0s-token --profile numa --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
+              k0s install worker --token-file=/etc/k0s/token --profile numa --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
             fi
           args:
             executable: /bin/bash
@@ -762,7 +762,7 @@
       block:
         - name: Create Cilium LoadBalancer IP Pool
           copy:
-            dest: /root/cilium-lb-config.yaml
+            dest: /etc/k0s/cilium-lb-config.yaml
             content: |
               apiVersion: "cilium.io/v2"
               kind: CiliumLoadBalancerIPPool
@@ -777,7 +777,7 @@
         - name: Apply Cilium LoadBalancer configuration
           shell: |
             export KUBECONFIG=/var/lib/k0s/pki/admin.conf
-            k0s kubectl apply -f /root/cilium-lb-config.yaml
+            k0s kubectl apply -f /etc/k0s/cilium-lb-config.yaml
           args:
             executable: /bin/bash
           register: cilium_lb_apply_result
