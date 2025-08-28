@@ -88,6 +88,7 @@ done
 
 # Remove documentation
 find /usr/share/doc -type f ! -name "copyright" -delete
+find /usr/share/doc-base -type f -delete
 find /usr/share/man -type f -delete
 find /usr/share/groff -type f -delete
 find /usr/share/info -type f -delete
@@ -99,6 +100,7 @@ find /usr/share/locale -type f -not -path "/usr/share/locale/en*" -delete
 
 # Clean up empty directories
 find /usr/share/doc -type d -empty -delete
+find /usr/share/doc-base -type d -empty -delete
 find /usr/share/man -type d -empty -delete
 find /usr/share/groff -type d -empty -delete
 find /usr/share/info -type d -empty -delete
