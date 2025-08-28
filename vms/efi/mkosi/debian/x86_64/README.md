@@ -1,5 +1,11 @@
 **Debian EFI Virtual Machine specific OS Image.**
 
+*Install mkosi:*
+
+    pipx install git+https://github.com/systemd/mkosi.git
+    export PATH="$HOME/.local/bin:$PATH"
+    mkosi --version
+
 *Build RAW image:*
 
     mkosi build

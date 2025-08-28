@@ -3,7 +3,7 @@ X-Repolib-Name: docker
 Types: deb
 URIs: https://download.docker.com/linux/debian
 Signed-By: /etc/apt/keyrings/docker.asc
-Suites: bookworm
+Suites: trixie
 Architectures: arm64
 Components: stable
 Enabled: yes

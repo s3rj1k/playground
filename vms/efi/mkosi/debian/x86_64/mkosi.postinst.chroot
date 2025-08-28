@@ -2,12 +2,16 @@
 
 set -x
 
+# `apt-mark showauto` - ref: https://github.com/systemd/mkosi/issues/3659
+# cp /var/lib/apt/extended_states $BUILDROOT/var/lib/apt/
+
 # Mask systemd services
 systemctl mask auditd.service
 systemctl mask chronyd.service
 systemctl mask connman.service
 systemctl mask display-manager.service
 systemctl mask firewalld.service
+systemctl mask lxd-installer.socket
 systemctl mask ModemManager.service
 systemctl mask NetworkManager.service
 systemctl mask plymouth-quit-wait.service
@@ -26,6 +30,7 @@ systemctl mask ufw.service
 systemctl enable systemd-networkd.service
 systemctl enable systemd-resolved.service
 systemctl enable docker.service
+systemctl enable ssh.service
 
 # Disable swap
 sed -i 's/^\([^#].*[[:space:]]\+swap[[:space:]]\+.*\)$/#\1/' /etc/fstab
@@ -79,6 +84,7 @@ done
 
 # Remove documentation
 find /usr/share/doc -type f ! -name "copyright" -delete
+find /usr/share/doc-base -type f -delete
 find /usr/share/man -type f -delete
 find /usr/share/groff -type f -delete
 find /usr/share/info -type f -delete
@@ -90,6 +96,7 @@ find /usr/share/locale -type f -not -path "/usr/share/locale/en*" -delete
 
 # Clean up empty directories
 find /usr/share/doc -type d -empty -delete
+find /usr/share/doc-base -type d -empty -delete
 find /usr/share/man -type d -empty -delete
 find /usr/share/groff -type d -empty -delete
 find /usr/share/info -type d -empty -delete
@@ -97,9 +104,9 @@ find /usr/share/lintian -type d -empty -delete
 find /usr/share/linda -type d -empty -delete
 find /usr/share/locale -type d -empty -delete
 
+# Prepare locale
+locale-gen
+
 # Clean apt cache
 rm -vrf /var/lib/apt/lists /var/cache/apt
 apt clean
-
-# Prepare locale
-locale-gen
