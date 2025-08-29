@@ -177,6 +177,8 @@
               # GIT
               - git
               - git-lfs
+              # Python development headers
+              - python3-dev
               # Networking
               - ebtables
               - iproute2
@@ -196,6 +198,7 @@
               - mc
               # Sushy Tools dependencies
               - apache2-utils
+              - build-essential
               - gcc
               - libvirt-dev
               - pkg-config

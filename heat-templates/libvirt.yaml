@@ -33,6 +33,7 @@ parameters:
       - allowed_values:
           - ubuntu-24.04-minimal-cloudimg-amd64
           - debian-13-generic-amd64
+          - debian-13-btrfs-amd64
         description: "Must be a known Image ID"
 
   ssh_pub_key:
@@ -257,7 +258,7 @@ resources:
     properties:
       handle:
         get_resource: vm_wait_handle
-      timeout: 1800
+      timeout: 3600
 
   vm_user_data:
     type: "OS::Heat::Value"
