@@ -1,19 +1,18 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: MIT
 
-# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git k0s/debian-playbook-opt.yml
-#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "ENABLE_DYNAMIC_CONFIG=true" k0s/debian-playbook-opt.yml
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k8s-deb.yml
+# ref: https://philprime.dev/guides/building-a-production-ready-kubernetes-cluster-from-scratch/lesson-8
 
 ---
-- name: Kubernetes (k0s) on Debian/Ubuntu AMD64
+- name: Kubernetes (k8s) on Debian AMD64
   hosts: localhost
   connection: local
   become: true
   gather_facts: true
   ignore_errors: false
   vars:
-    K0S_MAJOR_MINOR_VERSION: "1.33"
-    ENABLE_DYNAMIC_CONFIG: false
+    KUBERNETES_VERSION: "v1.33"
     CRIO_VERSION: "v1.33"
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
@@ -68,7 +67,7 @@
             snap list | awk '/^core/ {print $1}' | xargs -r snap remove --purge
             snap list | awk '/^snapd/ {print $1}' | xargs -r snap remove --purge
             snap list | awk '!/^Name/ {print $1}' | xargs -r snap remove --purge
-          ignore_errors: yes
+          ignore_errors: true
           when: ansible_distribution == "Ubuntu"
 
         - name: Remove system packages
@@ -116,7 +115,7 @@
             remove: yes
           loop:
             - lxd
-          ignore_errors: yes
+          ignore_errors: true
 
         - name: Remove groups
           group:
@@ -124,7 +123,7 @@
             state: absent
           loop:
             - lxd
-          ignore_errors: yes
+          ignore_errors: true
 
     - name: Update and upgrade system packages
       apt:
@@ -133,6 +132,7 @@
       register: system_upgraded
 
     - name: Consolidated package management
+      # apt-cache madison $(apt-cache pkgnames)
       block:
         - name: Create directory for apt keyrings
           ansible.builtin.file:
@@ -141,6 +141,25 @@
             mode: "0755"
 
         # Note: `ansible.builtin.deb822_repository` requires Ansible 2.15+
+
+        - name: Download Kubernetes signing key
+          ansible.builtin.get_url:
+            url: "https://prod-cdn.packages.k8s.io/repositories/isv:/kubernetes:/core:/stable:/{{ KUBERNETES_VERSION }}/deb/Release.key"
+            dest: "/etc/apt/keyrings/kubernetes.asc"
+            mode: "0644"
+
+        - name: Create Kubernetes repository file
+          ansible.builtin.copy:
+            dest: "/etc/apt/sources.list.d/kubernetes.sources"
+            content: |
+              X-Repolib-Name: kubernetes
+              Types: deb
+              URIs: https://prod-cdn.packages.k8s.io/repositories/isv:/kubernetes:/core:/stable:/{{ KUBERNETES_VERSION }}/deb/
+              Signed-By: /etc/apt/keyrings/kubernetes.asc
+              Suites: /
+              Architectures: amd64
+              Enabled: yes
+            mode: "0644"
 
         - name: Download CRI-O signing key
           ansible.builtin.get_url:
@@ -213,15 +232,14 @@
               - libnetfilter-cttimeout1
               - libnetfilter-log1
               - socat
-              # Python dependencies
-              - python3
-              - python3-pip
-              - python3-yaml
               # Containers
               - buildah
               # Kubernetes
               - cri-o
               - helm
+              - kubeadm
+              - kubectl
+              - kubelet
               # Text and JSON processing
               - gawk
               - jq
@@ -253,35 +271,7 @@
             url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ version }}/clusterctl-linux-amd64"
             dest: /usr/local/bin/clusterctl
             mode: "0755"
-          when: version is defined
-      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-    - name: Install Cilium CLI
-      block:
-        - name: Get Cilium CLI latest version
-          uri:
-            url: "https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt"
-            return_content: yes
-          register: cilium_version_info
-
-        - name: Set Cilium CLI version
-          set_fact:
-            cilium_version: "{{ cilium_version_info.content | trim }}"
-          when: cilium_version_info is defined and cilium_version_info.status == 200
-
-        - name: Download Cilium CLI
-          get_url:
-            url: "https://github.com/cilium/cilium-cli/releases/download/{{ cilium_version }}/cilium-linux-amd64.tar.gz"
-            dest: "/tmp/cilium-linux-amd64.tar.gz"
-          when: cilium_version is defined
-
-        - name: Extract Cilium CLI to /usr/local/bin
-          unarchive:
-            src: "/tmp/cilium-linux-amd64.tar.gz"
-            dest: "/usr/local/bin"
-            remote_src: yes
-            mode: "0755"
-          when: cilium_version is defined
+          when: version | trim | length > 0
       when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     - name: Configure and generate locale
@@ -427,9 +417,14 @@
             mode: "0644"
           register: grub_config
 
+        - name: Check if /boot/grub directory exists
+          stat:
+            path: /boot/grub
+          register: grub_dir
+
         - name: Update GRUB configuration
           command: update-grub
-          when: grub_config is changed
+          when: grub_config is changed and grub_dir.stat.exists
 
     - name: Install etcd network tuning script and udev rule
       block:
@@ -533,6 +528,78 @@
           when: REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0
           notify: Restart crio
 
+    - name: Initialize Kubernetes Control Plane
+      block:
+        - name: Extract latest patch release for {{ KUBERNETES_VERSION }}
+          shell: |
+            curl -s --fail "https://api.github.com/repos/kubernetes/kubernetes/releases" | tr -d '\000-\037' | jq -r '
+              [.[] | select(.tag_name | startswith("{{ KUBERNETES_VERSION }}.")) |
+               select(.prerelease == false)] |
+              sort_by(.published_at) |
+              reverse'
+          register: k8s_releases_filtered_raw
+
+        - name: Parse filtered releases
+          set_fact:
+            k8s_releases_filtered: "{{ k8s_releases_filtered_raw.stdout | from_json }}"
+          when:
+            - k8s_releases_filtered_raw is defined
+            - k8s_releases_filtered_raw.stdout != ""
+            - k8s_releases_filtered_raw.stdout != "null"
+
+        - name: Set version from patch releases if available
+          set_fact:
+            version: "{{ k8s_releases_filtered[0].tag_name }}"
+          when:
+            - k8s_releases_filtered is defined
+            - k8s_releases_filtered | trim | length > 0
+
+        - name: Use KUBERNETES_VERSION as fallback if no patch releases found
+          set_fact:
+            version: "{{ KUBERNETES_VERSION }}"
+          when:
+            - k8s_releases_filtered is defined
+            - k8s_releases_filtered | trim | length == 0
+
+        - name: Create kubeadm configuration directory
+          file:
+            path: /etc/kubeadm
+            state: directory
+            mode: "0755"
+
+        - name: Create kubeadm configuration file
+          # FeatureGates:
+          #  - https://kubernetes.io/docs/tasks/configure-pod-container/image-volumes/
+          copy:
+            dest: /etc/kubeadm/init.yaml
+            content: |
+              ---
+              apiVersion: kubeadm.k8s.io/v1beta4
+              kind: InitConfiguration
+              nodeRegistration:
+                criSocket: "unix:///var/run/crio/crio.sock"
+              skipPhases:
+                - addon/kube-proxy
+              ---
+              apiVersion: kubeadm.k8s.io/v1beta4
+              kind: ClusterConfiguration
+              kubernetesVersion: {{ version }}
+              ---
+              apiVersion: kubelet.config.k8s.io/v1beta1
+              kind: KubeletConfiguration
+              cgroupDriver: systemd
+              featureGates:
+                ImageVolume: true
+            mode: "0644"
+          when: version is defined and version | trim | length > 0
+
+        - name: Enable and start Kubelet service
+          systemd:
+            name: kubelet
+            enabled: yes
+            state: started
+            daemon_reload: yes
+
         - name: Enable and start CRI-O service
           systemd:
             name: crio
@@ -540,248 +607,164 @@
             state: started
             daemon_reload: yes
 
-    - name: Install k0s
-      block:
-        - name: Get latest k0s {{ K0S_MAJOR_MINOR_VERSION }} version
-          shell: |
-            curl -s "https://api.github.com/repos/k0sproject/k0s/releases" | \
-            jq -r '.[] | select(.tag_name | test("^v{{ K0S_MAJOR_MINOR_VERSION | replace(".", "\\.") }}\\.[0-9]+\\+k0s\\.[0-9]+$")) | .tag_name' | \
-            head -1
-          register: k0s_version_result
+        - name: Check if Kubernetes cluster is already running
+          command: kubectl get nodes
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: kubectl_get_nodes
+          changed_when: false
+          failed_when: false
+
+        - name: Reset Kubernetes Control Plane if needed
+          command: kubeadm reset --force
+          register: kubeadm_reset
+          changed_when: true
+          failed_when: false
+          when: kubectl_get_nodes.rc != 0
+
+        - name: Initialize the Kubernetes Control Plane
+          command: kubeadm init --config=/etc/kubeadm/init.yaml
+          args:
+            creates: /etc/kubernetes/admin.conf
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: kubeadm_init
+          changed_when: true
+          failed_when: kubeadm_init.rc != 0
+          when: kubectl_get_nodes.rc != 0
+
+        - name: Create .kube directory for root user
+          file:
+            path: /root/.kube
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Create symlink from admin.conf to .kube/config
+          file:
+            src: /etc/kubernetes/admin.conf
+            dest: /root/.kube/config
+            state: link
+            force: true
+
+        - name: Check if Control Plane taint exists
+          shell: kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes -o jsonpath='{.items[*].spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")].key}'
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: taint_check
           changed_when: false
 
-        - name: Set k0s version
-          set_fact:
-            k0s_version: "{{ k0s_version_result.stdout }}"
-          when: k0s_version_result.stdout | length > 0
-
-        - name: Download k0s binary ({{ k0s_version | default('version not found') }})
-          get_url:
-            url: "https://github.com/k0sproject/k0s/releases/download/{{ k0s_version }}/k0s-{{ k0s_version }}-amd64"
-            dest: /usr/local/bin/k0s
-            mode: "0755"
-          when: k0s_version is defined
-
-        - name: Create k0s configuration file
-          blockinfile:
-            path: /etc/k0s/k0s.yaml
-            create: yes
-            block: |
-              # Manual k0s cluster recreation commands:
-              #
-              # k0s stop ; k0s reset --kubelet-root-dir=/var/lib/kubelet --debug
-              #
-              # k0s install controller --enable-dynamic-config --disable-components=konnectivity-server --enable-worker --no-taints --profile numa --config /etc/k0s/k0s.yaml --kubelet-root-dir=/var/lib/kubelet --debug
-              # k0s start ; sleep 5 ; systemctl status k0scontroller ; cat /proc/$(pidof kubelet)/cmdline | tr -s '\0' '\n' ; cat /run/k0s/kubelet/config.yaml
-              #
-              # k0s token create --role=worker
-              # k0s kubeconfig admin | base64 -w 0
-              #
-              # k0s install worker --token-file=/etc/k0s/token --profile numa --kubelet-root-dir=/var/lib/kubelet --debug
-              # k0s start ; sleep 5 ; systemctl status k0sworker ; cat /proc/$(pidof kubelet)/cmdline | tr -s '\0' '\n' ; cat /run/k0s/kubelet/config.yaml
-
-              apiVersion: k0s.k0sproject.io/v1beta1
-              kind: ClusterConfig
-              metadata:
-                name: k0s
-                namespace: kube-system
-              spec:
-                telemetry:
-                  enabled: false
-              {% if REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0 %}
-                images:
-                  repository: {{ REGISTRY_MIRROR }}
-              {% endif %}
-                storage:
-                  type: etcd
-                network:
-                  provider: custom
-                  dualStack:
-                    enabled: false
-                  calico:
-                    mode: vxlan
-                    mtu: 1400
-                    overlay: Always
-                    ipAutodetectionMethod: can-reach=8.8.8.8
-                    envVars:
-                      FELIX_IGNORELOOSERPF: "true"
-                      FELIX_ALLOWVXLANPACKETSFROMWORKLOADS: "true"
-                featureGates:
-                  - name: ImageVolume
-                    enabled: true
-                workerProfiles:
-                  - name: numa
-                    values:
-                      topologyManagerPolicy: "best-effort"
-                      cpuManagerPolicy: "static"
-                      cpuManagerPolicyOptions:
-                        full-pcpus-only: "true"
-                        distribute-cpus-across-numa: "true"
-                      reservedSystemCPUs: "0"
-                      reservedMemory:
-                        - limits:
-                            memory: 2Gi
-                          numaNode: 0
-                      kubeReservedCgroup: ""
-            marker: ""
-            mode: "0644"
-
-        - name: Create systemd override directory for k0scontroller
-          file:
-            path: /etc/systemd/system/k0scontroller.service.d
-            state: directory
-            mode: "0755"
-          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-        - name: Create systemd override directory for k0sworker
-          file:
-            path: /etc/systemd/system/k0sworker.service.d
-            state: directory
-            mode: "0755"
-          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
-
-        - name: Configure k0scontroller service override
-          copy:
-            dest: /etc/systemd/system/k0scontroller.service.d/override.conf
-            content: |
-              [Service]
-              LimitNOFILE=1048576
-              OOMScoreAdjust=-999
-            mode: "0644"
-          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-        - name: Configure k0sworker service override
-          copy:
-            dest: /etc/systemd/system/k0sworker.service.d/override.conf
-            content: |
-              [Service]
-              LimitNOFILE=1048576
-              OOMScoreAdjust=-999
-            mode: "0644"
-          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
-
-        - name: Install k0s as a Controller
-          shell: |
-            if [ ! -f /etc/systemd/system/k0scontroller.service ]; then
-              DYNAMIC_CONFIG_FLAG=""
-              if [ "${ENABLE_DYNAMIC_CONFIG:-false}" = "true" ]; then
-                DYNAMIC_CONFIG_FLAG="--enable-dynamic-config"
-              fi
-
-              DISABLED_COMPONENTS_FLAG="--disable-components=konnectivity-server"
-
-              k0s install controller -c /etc/k0s/k0s.yaml $DYNAMIC_CONFIG_FLAG $DISABLED_COMPONENTS_FLAG --enable-worker --no-taints --profile numa --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
-            fi
-          args:
-            executable: /bin/bash
+        - name: Remove taints from Control Plane nodes
+          command: kubectl --kubeconfig /etc/kubernetes/admin.conf taint nodes --all node-role.kubernetes.io/control-plane-
           environment:
-            ENABLE_DYNAMIC_CONFIG: "{{ ENABLE_DYNAMIC_CONFIG | default(false) | string | lower }}"
-          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-        - name: Create Worker token file
-          copy:
-            content: "{{ WORKER_DATA }}"
-            dest: /etc/k0s/token
-            mode: "0600"
-          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
-
-        - name: Install k0s as a Worker with token
-          shell: |
-            if [ ! -f /etc/systemd/system/k0sworker.service ]; then
-              k0s install worker --token-file=/etc/k0s/token --profile numa --cri-socket=remote:unix:///var/run/crio/crio.sock --kubelet-root-dir=/var/lib/kubelet --verbose
-            fi
-          args:
-            executable: /bin/bash
-          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
-
-        - name: Start k0s Controller service
-          systemd:
-            name: k0scontroller.service
-            state: started
-            enabled: yes
-          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-        - name: Start k0s Worker service
-          systemd:
-            name: k0sworker.service
-            state: started
-            enabled: yes
-          when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
-
-        - name: Create k0s shell configuration file
-          copy:
-            dest: /etc/profile.d/k0s.sh
-            content: |
-              export KUBECONFIG=/var/lib/k0s/pki/admin.conf
-            mode: "0644"
-          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-        - name: Create kubectl symlink
-          file:
-            src: /usr/local/bin/k0s
-            dest: /usr/local/bin/kubectl
-            state: link
-
-    - name: Install and configure Cilium CNI
-      block:
-        - name: Install Cilium CNI with L2 announcements
-          shell: |
-            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
-            cilium install --set l2announcements.enabled=true --set devices='{eth+,ens+,eno+,enp+}'
-          args:
-            executable: /bin/bash
-          register: cilium_install_result
-          until: cilium_install_result.rc == 0
-          retries: 40
-          delay: 60
-
-        - name: Wait for Cilium to be ready
-          shell: |
-            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
-            cilium status --wait
-          args:
-            executable: /bin/bash
-          register: cilium_status_result
-          until: cilium_status_result.rc == 0
-          retries: 40
-          delay: 60
-
-        - name: Wait for k0s cluster to be ready
-          shell: |
-            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
-            k0s kubectl wait --for=condition=Ready nodes --all --timeout=300s
-          args:
-            executable: /bin/bash
-          register: cluster_ready
-          until: cluster_ready.rc == 0
-          retries: 10
-          delay: 30
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: remove_taint
+          changed_when: remove_taint.rc == 0
+          failed_when: false
+          when: taint_check.stdout | length > 0
       when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
-    - name: Configure Cilium Load Balancer
+    # Install Cilium as CNI (https://docs.cilium.io/en/stable/gettingstarted/k8s-install-default/)
+    - name: Install Cilium CNI
       block:
-        - name: Create Cilium LoadBalancer IP Pool
+        - name: Fetch Cilium CLI stable version
+          uri:
+            url: "https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt"
+            return_content: yes
+          register: cilium_cli_stable
+
+        - name: Set Cilium CLI version
+          set_fact:
+            cilium_cli_version: "{{ cilium_cli_stable.content | trim }}"
+          when: cilium_cli_stable is defined and cilium_cli_stable.status == 200
+
+        - name: Fetch Cilium stable version
+          uri:
+            url: "https://raw.githubusercontent.com/cilium/cilium/main/stable.txt"
+            return_content: yes
+          register: cilium_stable
+
+        - name: Set Cilium version
+          set_fact:
+            cilium_version: "{{ cilium_stable.content | trim }}"
+          when: cilium_stable is defined and cilium_stable.status == 200
+
+        - name: Download and install Cilium CLI {{ cilium_cli_version }}
+          shell: |
+            curl -L --fail https://github.com/cilium/cilium-cli/releases/download/{{ cilium_cli_version }}/cilium-linux-amd64.tar.gz | \
+            tar xzf - -C /usr/local/bin
+          args:
+            creates: /usr/local/bin/cilium
+          when: cilium_cli_version is defined and cilium_cli_version | trim | length > 0
+
+        - name: Make Cilium CLI executable
+          file:
+            path: /usr/local/bin/cilium
+            mode: "0755"
+            state: file
+          when: cilium_cli_version is defined and cilium_cli_version | trim | length > 0
+
+        - name: Check if Cilium is already installed
+          command: cilium status --kubeconfig /etc/kubernetes/admin.conf
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+            HOME: /root
+            XDG_CACHE_HOME: /root/.cache
+          register: cilium_status
+          changed_when: false
+          failed_when: false
+          when: cilium_cli_version is defined and cilium_cli_version | trim | length > 0
+
+        - name: Install Cilium {{ cilium_version }} if not already installed
+          command: cilium install --version {{ cilium_version }} --kubeconfig /etc/kubernetes/admin.conf
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+            HOME: /root
+            XDG_CACHE_HOME: /root/.cache
+          register: cilium_install
+          changed_when: cilium_install.rc == 0
+          failed_when: cilium_install.rc != 0
+          when:
+            - cilium_status.rc != 0
+            - cilium_version is defined and cilium_version | trim | length > 0
+
+        - name: Wait for Cilium to be ready
+          command: cilium status --wait --kubeconfig /etc/kubernetes/admin.conf
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+            HOME: /root
+            XDG_CACHE_HOME: /root/.cache
+          register: cilium_wait
+          changed_when: false
+          until: cilium_wait.rc == 0
+          retries: 5
+          delay: 30
+          when: cilium_cli_version is defined and cilium_cli_version | trim | length > 0
+      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+
+    - name: Configure LB
+      block:
+        - name: Create CiliumLoadBalancerIPPool
           copy:
-            dest: /etc/k0s/cilium-lb-config.yaml
+            dest: /root/lb-config.yaml
             content: |
-              apiVersion: "cilium.io/v2"
+              apiVersion: cilium.io/v2alpha1
               kind: CiliumLoadBalancerIPPool
               metadata:
-                name: "default-pool"
+                name: default-pool
               spec:
                 blocks:
-                - start: "{{ LB_IP_RANGE_START }}"
-                  stop: "{{ LB_IP_RANGE_STOP }}"
+                  - start: "{{ LB_IP_RANGE_START }}"
+                    stop: "{{ LB_IP_RANGE_STOP }}"
             mode: "0644"
 
-        - name: Apply Cilium LoadBalancer configuration
-          shell: |
-            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
-            k0s kubectl apply -f /etc/k0s/cilium-lb-config.yaml
-          args:
-            executable: /bin/bash
-          register: cilium_lb_apply_result
-          until: cilium_lb_apply_result.rc == 0
+        - name: Apply CiliumLoadBalancerIPPool configuration
+          command: kubectl apply -f /root/lb-config.yaml
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: apply_result
+          until: apply_result.rc == 0
           retries: 5
           delay: 30
       when:
@@ -789,43 +772,66 @@
         - LB_IP_RANGE_START | default("") | length > 0
         - LB_IP_RANGE_STOP | default("") | length > 0
 
-    - name: Deploy local-path-provisioner via k0s manifests
+    - name: Configure Local Path Provisioner
       block:
-        - name: Get latest local-path-provisioner version
+        - name: Get latest version
           uri:
             url: "https://api.github.com/repos/rancher/local-path-provisioner/releases/latest"
             return_content: yes
-          register: lpp_release_info
+          register: release_info
 
-        - name: Set local-path-provisioner version
+        - name: Set version
           set_fact:
-            lpp_version: "{{ lpp_release_info.json.tag_name }}"
-          when: lpp_release_info is defined and lpp_release_info.status == 200
+            # curl -s "https://api.github.com/repos/rancher/local-path-provisioner/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
 
-        - name: Create k0s manifests directory for local-path-provisioner
-          file:
-            path: /var/lib/k0s/manifests/local-path-provisioner
-            state: directory
-            mode: "0755"
+        - name: Apply Local Path Provisioner manifest ({{ version }})
+          command: kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ version }}/deploy/local-path-storage.yaml
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: apply_result
+          until: apply_result.rc == 0
+          retries: 5
+          delay: 30
 
-        - name: Download and deploy local-path-provisioner manifest
-          get_url:
-            url: "https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ lpp_version }}/deploy/local-path-storage.yaml"
-            dest: /var/lib/k0s/manifests/local-path-provisioner/local-path-storage.yaml
-            mode: "0644"
-          when: lpp_version is defined
+        - name: Set Local Path Storage as default storage class
+          shell: |
+            kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: default_sc_result
+          until: default_sc_result.rc == 0
+          retries: 5
+          delay: 30
+      when:
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
-        - name: Set local-path as default storage class
-          blockinfile:
-            path: /var/lib/k0s/manifests/local-path-provisioner/local-path-storage.yaml
-            marker: "# {mark} ANSIBLE MANAGED BLOCK - Default StorageClass"
-            insertafter: "kind: StorageClass"
-            block: |
-              metadata:
-                name: local-path
-                annotations:
-                  storageclass.kubernetes.io/is-default-class: "true"
-      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+    - name: Initialize Kubernetes Worker Node
+      block:
+        - name: Enable and start Kubelet service
+          systemd:
+            name: kubelet
+            enabled: yes
+            state: started
+            daemon_reload: yes
+
+        - name: Enable and start CRI-O service
+          systemd:
+            name: crio
+            enabled: yes
+            state: started
+            daemon_reload: yes
+
+        - name: Join the Kubernetes cluster as worker node
+          command: "{{ WORKER_DATA }}"
+          register: worker_join
+          changed_when: true
+          failed_when: worker_join.rc != 0
+          until: worker_join is succeeded
+          retries: 5
+          delay: 30
+      when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
     - name: Mask unnecessary systemd units
       systemd:
