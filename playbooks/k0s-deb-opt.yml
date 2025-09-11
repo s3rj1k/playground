@@ -161,26 +161,6 @@
               Enabled: yes
             mode: "0644"
 
-        - name: Download Helm signing key
-          ansible.builtin.get_url:
-            url: https://baltocdn.com/helm/signing.asc
-            dest: /etc/apt/keyrings/helm.asc
-            mode: "0644"
-
-        - name: Create Helm repository file
-          ansible.builtin.copy:
-            dest: /etc/apt/sources.list.d/helm.sources
-            content: |
-              X-Repolib-Name: helm
-              Types: deb
-              URIs: https://baltocdn.com/helm/stable/debian/
-              Signed-By: /etc/apt/keyrings/helm.asc
-              Suites: all
-              Architectures: amd64
-              Components: main
-              Enabled: yes
-            mode: "0644"
-
         - name: Update apt cache after adding repositories
           apt:
             update_cache: yes
@@ -221,7 +201,6 @@
               - buildah
               # Kubernetes
               - cri-o
-              - helm
               # Text and JSON processing
               - gawk
               - jq

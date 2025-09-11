@@ -127,34 +127,6 @@
 
     - name: Consolidated package management
       block:
-        - name: Create directory for apt keyrings
-          ansible.builtin.file:
-            path: /etc/apt/keyrings
-            state: directory
-            mode: "0755"
-
-        # Note: `ansible.builtin.deb822_repository` requires Ansible 2.15+
-
-        - name: Download Helm signing key
-          ansible.builtin.get_url:
-            url: https://baltocdn.com/helm/signing.asc
-            dest: /etc/apt/keyrings/helm.asc
-            mode: "0644"
-
-        - name: Create Helm repository file
-          ansible.builtin.copy:
-            dest: /etc/apt/sources.list.d/helm.sources
-            content: |
-              X-Repolib-Name: helm
-              Types: deb
-              URIs: https://baltocdn.com/helm/stable/debian/
-              Signed-By: /etc/apt/keyrings/helm.asc
-              Suites: all
-              Architectures: amd64
-              Components: main
-              Enabled: yes
-            mode: "0644"
-
         - name: Update apt cache after adding repositories
           apt:
             update_cache: yes
@@ -193,8 +165,6 @@
               - python3-yaml
               # Containers
               - buildah
-              # Kubernetes
-              - helm
               # Text and JSON processing
               - gawk
               - jq
