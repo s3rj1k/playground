@@ -17,7 +17,7 @@
 
 *Prepare empty raw disk image file:*
 
-	fallocate -l 10G rootfs.img
+	fallocate -l 50G rootfs.img
 
 *Associate disk image with loop device:*
 
@@ -68,6 +68,10 @@
 	  -netdev user,id=vnet,hostfwd=:127.0.0.1:0-:22 \
 	  -device virtio-net-pci,netdev=vnet,romfile= \
 	  -boot menu=off,strict=on,order=c
+
+*Sparsify rootfs image:*
+
+	virt-sparsify --in-place rootfs.img
 
 *Installs systemd-boot into the EFI system partition:*
 

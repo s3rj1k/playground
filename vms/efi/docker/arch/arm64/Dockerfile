@@ -45,7 +45,6 @@ RUN pacman -Syy --noconfirm && \
     iptables-nft \
     && \
     pacman -Syu --noconfirm \
-    avahi \
     docker \
     docker-buildx \
     docker-compose \
@@ -56,7 +55,6 @@ RUN pacman -Syy --noconfirm && \
     pacman -Scc --noconfirm
 
 RUN userdel -r alarm
-
 RUN userdel -r dhcpcd || true
 
 RUN echo "vm" > /etc/hostname
@@ -70,12 +68,7 @@ RUN ln -sf /dev/null /etc/systemd/system/systemd-homed.service && \
     ln -sf /dev/null /etc/systemd/system/syslog.service && \
     ln -sf /dev/null /etc/systemd/system/syslog.socket
 
-RUN ln -sf /usr/lib/systemd/system/avahi-daemon.service /etc/systemd/system/multi-user.target.wants/avahi-daemon.service && \
-    ln -sf /usr/lib/systemd/system/avahi-daemon.socket /etc/systemd/system/sockets.target.wants/avahi-daemon.socket && \
-    ln -sf /usr/lib/systemd/system/avahi-daemon.service /etc/systemd/system/dbus-org.freedesktop.Avahi.service && \
-    ln -sf /usr/lib/systemd/system/docker.service /etc/systemd/system/multi-user.target.wants/docker.service
-
-RUN cp /usr/share/doc/avahi/ssh.service /etc/avahi/services/
+RUN ln -sf /usr/lib/systemd/system/docker.service /etc/systemd/system/multi-user.target.wants/docker.service
 
 RUN rm -vf /etc/locale.gen.pacnew
 
@@ -305,59 +298,6 @@ LLMNR=no
 
 ReadEtcHosts=yes
 EOF
-
-COPY <<EOF /etc/avahi/avahi-daemon.conf
-# avahi-browse --all --ignore-local --resolve --terminate
-[server]
-domain-name=local
-use-ipv4=yes
-use-ipv6=yes
-allow-interfaces=enp0s1
-use-iff-running=yes
-enable-dbus=yes
-disallow-other-stacks=yes
-
-[wide-area]
-enable-wide-area=yes
-
-[publish]
-publish-addresses=yes
-publish-hinfo=no
-publish-workstation=no
-publish-domain=yes
-
-[reflector]
-enable-reflector=no
-EOF
-
-COPY <<EOF /etc/systemd/system/restart-avahi.service
-[Unit]
-Description=Restart Avahi daemon
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/systemctl restart avahi-daemon.service
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-COPY <<EOF /etc/systemd/system/restart-avahi.timer
-[Unit]
-Description=Timer to restart Avahi daemon every 3 minutes
-
-[Timer]
-OnBootSec=3min
-OnUnitActiveSec=3min
-Unit=restart-avahi.service
-
-[Install]
-WantedBy=timers.target
-EOF
-
-# Disable timer by default
-#RUN ln -sf /etc/systemd/system/restart-avahi.timer /etc/systemd/system/timers.target.wants/restart-avahi.timer
 
 FROM scratch
 COPY --from=rootfs / /
