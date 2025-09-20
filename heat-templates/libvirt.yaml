@@ -23,6 +23,7 @@ parameters:
     type: string
     description: "Image registry mirror URL"
     label: "Image Registry Mirror"
+    default: ""
 
   image_id:
     type: string
@@ -75,17 +76,17 @@ parameters:
     default: "10.42.71.101"
     label: "VM IP 1"
 
-  vm_ip_2:
-    type: string
-    description: "Second IP address for VM"
-    default: "10.42.71.102"
-    label: "VM IP 2"
+  # vm_ip_2:
+  #   type: string
+  #   description: "Second IP address for VM"
+  #   default: "10.42.71.102"
+  #   label: "VM IP 2"
 
-  vm_ip_3:
-    type: string
-    description: "Third IP address for VM"
-    default: "10.42.71.103"
-    label: "VM IP 3"
+  # vm_ip_3:
+  #   type: string
+  #   description: "Third IP address for VM"
+  #   default: "10.42.71.103"
+  #   label: "VM IP 3"
 
   availability_zone:
     type: string
@@ -188,43 +189,43 @@ resources:
           ip_address:
             get_param: vm_ip_1
 
-  port_vm_2:
-    type: "OS::Neutron::Port"
-    properties:
-      name:
-        str_replace:
-          template: $prefix-port-vm-2
-          params:
-            $prefix:
-              get_param: prefix
-      network:
-        get_resource: network
-      admin_state_up: true
-      port_security_enabled: false
-      fixed_ips:
-        - subnet:
-            get_resource: subnet
-          ip_address:
-            get_param: vm_ip_2
+  # port_vm_2:
+  #   type: "OS::Neutron::Port"
+  #   properties:
+  #     name:
+  #       str_replace:
+  #         template: $prefix-port-vm-2
+  #         params:
+  #           $prefix:
+  #             get_param: prefix
+  #     network:
+  #       get_resource: network
+  #     admin_state_up: true
+  #     port_security_enabled: false
+  #     fixed_ips:
+  #       - subnet:
+  #           get_resource: subnet
+  #         ip_address:
+  #           get_param: vm_ip_2
 
-  port_vm_3:
-    type: "OS::Neutron::Port"
-    properties:
-      name:
-        str_replace:
-          template: $prefix-port-vm-3
-          params:
-            $prefix:
-              get_param: prefix
-      network:
-        get_resource: network
-      admin_state_up: true
-      port_security_enabled: false
-      fixed_ips:
-        - subnet:
-            get_resource: subnet
-          ip_address:
-            get_param: vm_ip_3
+  # port_vm_3:
+  #   type: "OS::Neutron::Port"
+  #   properties:
+  #     name:
+  #       str_replace:
+  #         template: $prefix-port-vm-3
+  #         params:
+  #           $prefix:
+  #             get_param: prefix
+  #     network:
+  #       get_resource: network
+  #     admin_state_up: true
+  #     port_security_enabled: false
+  #     fixed_ips:
+  #       - subnet:
+  #           get_resource: subnet
+  #         ip_address:
+  #           get_param: vm_ip_3
 
   floating_ip_vm_1:
     type: "OS::Neutron::FloatingIP"
@@ -234,21 +235,21 @@ resources:
       port_id:
         get_resource: port_vm_1
 
-  floating_ip_vm_2:
-    type: "OS::Neutron::FloatingIP"
-    properties:
-      floating_network:
-        get_param: external_network
-      port_id:
-        get_resource: port_vm_2
+  # floating_ip_vm_2:
+  #   type: "OS::Neutron::FloatingIP"
+  #   properties:
+  #     floating_network:
+  #       get_param: external_network
+  #     port_id:
+  #       get_resource: port_vm_2
 
-  floating_ip_vm_3:
-    type: "OS::Neutron::FloatingIP"
-    properties:
-      floating_network:
-        get_param: external_network
-      port_id:
-        get_resource: port_vm_3
+  # floating_ip_vm_3:
+  #   type: "OS::Neutron::FloatingIP"
+  #   properties:
+  #     floating_network:
+  #       get_param: external_network
+  #     port_id:
+  #       get_resource: port_vm_3
 
   vm_wait_handle:
     type: "OS::Heat::WaitConditionHandle"
@@ -334,10 +335,10 @@ resources:
       networks:
         - port:
             get_resource: port_vm_1
-        - port:
-            get_resource: port_vm_2
-        - port:
-            get_resource: port_vm_3
+        # - port:
+        #     get_resource: port_vm_2
+        # - port:
+        #     get_resource: port_vm_3
       user_data_format: RAW
       user_data:
         get_attr:
@@ -352,19 +353,19 @@ outputs:
         - floating_ip_vm_1
         - floating_ip_address
 
-  vm_floating_ip_2:
-    description: Second floating IP address for VM
-    value:
-      get_attr:
-        - floating_ip_vm_2
-        - floating_ip_address
+  # vm_floating_ip_2:
+  #   description: Second floating IP address for VM
+  #   value:
+  #     get_attr:
+  #       - floating_ip_vm_2
+  #       - floating_ip_address
 
-  vm_floating_ip_3:
-    description: Third floating IP address for VM
-    value:
-      get_attr:
-        - floating_ip_vm_3
-        - floating_ip_address
+  # vm_floating_ip_3:
+  #   description: Third floating IP address for VM
+  #   value:
+  #     get_attr:
+  #       - floating_ip_vm_3
+  #       - floating_ip_address
 
   vm_user_data:
     description: Rendered VM user-data
