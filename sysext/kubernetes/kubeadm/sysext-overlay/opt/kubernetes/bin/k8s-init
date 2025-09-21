@@ -1,0 +1,75 @@
+#!/bin/bash
+#
+# Kubernetes control plane initialization script
+#
+
+set -euo pipefail
+
+# Set environment variables
+export KUBECONFIG=${KUBECONFIG:-/etc/kubernetes/admin.conf}
+
+# Check if containerd is running
+if ! systemctl is-active containerd.service > /dev/null 2>&1; then
+	echo "Error: containerd service is not running"
+	echo "Please run: systemctl enable --now containerd.service"
+	exit 1
+fi
+
+echo "Initializing Kubernetes control plane..."
+
+# Reset any existing cluster configuration
+echo "Resetting any existing cluster configuration..."
+kubeadm reset --force
+
+# Initialize the control plane
+echo "Initializing control plane with kubeadm..."
+if ! kubeadm init --config /etc/kubeadm/init.yaml; then
+	echo "Error: Failed to initialize Kubernetes control plane"
+	exit 1
+fi
+
+# Wait for API server to be ready
+echo "Waiting for API server to be ready..."
+until kubectl --kubeconfig "$KUBECONFIG" cluster-info > /dev/null 2>&1; do
+	echo "Waiting for API server..."
+	sleep 5
+done
+
+# Remove control-plane taints to allow pods on control plane nodes
+echo "Removing control-plane taints to allow pods on control plane nodes..."
+if ! kubectl --kubeconfig "$KUBECONFIG" taint nodes --all node-role.kubernetes.io/control-plane-; then
+	echo "Warning: Failed to remove control-plane taints (this may be normal if already removed)"
+fi
+
+echo "Kubernetes control plane initialization completed successfully!"
+
+# Install Cilium CNI
+echo "Installing Cilium CNI..."
+
+# Check if Cilium is already installed
+echo "Checking if Cilium is already installed..."
+if cilium status --kubeconfig "$KUBECONFIG" > /dev/null 2>&1; then
+	echo "Cilium is already installed and running"
+else
+	# Install Cilium using local binary
+	echo "Installing Cilium..."
+	cilium install --kubeconfig "$KUBECONFIG"
+
+	# Wait for Cilium to be ready
+	echo "Waiting for Cilium to be ready..."
+	cilium status --wait --kubeconfig "$KUBECONFIG"
+
+	echo "Cilium installation completed successfully!"
+fi
+
+# Show cluster info
+echo "Cluster information:"
+kubectl --kubeconfig "$KUBECONFIG" cluster-info
+
+echo ""
+echo "Node status:"
+kubectl --kubeconfig "$KUBECONFIG" get nodes
+
+echo ""
+echo "Cilium status:"
+cilium status --kubeconfig "$KUBECONFIG"
