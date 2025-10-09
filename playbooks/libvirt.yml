@@ -1051,6 +1051,14 @@
                     - hostPath: /var/run/docker.sock
                       containerPath: /var/run/docker.sock
                       readOnly: false
+                - role: worker
+                  extraMounts:
+                    - hostPath: /root/.kind/default_hosts.toml
+                      containerPath: /etc/containerd/certs.d/_default/hosts.toml
+                      readOnly: true
+                    - hostPath: /var/run/docker.sock
+                      containerPath: /var/run/docker.sock
+                      readOnly: false
               containerdConfigPatches:
                 - |-
                   [plugins.'io.containerd.cri.v1.images'.registry]
