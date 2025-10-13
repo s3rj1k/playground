@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - ".github/workflows/k8s-mkosi_build.yaml"
+      - ".github/workflows/build-k8s-mkosi.yaml"
       - "vms/efi/mkosi/ubuntu/x86_64-k8s/**"
   workflow_dispatch:
 
@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup ORAS
         uses: oras-project/setup-oras@v1
