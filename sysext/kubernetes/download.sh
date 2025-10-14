@@ -32,6 +32,9 @@ main()
 	download_kubeadm
 	download_kubectl
 	download_kubelet
+	download_kube_apiserver
+	download_kube_controller_manager
+	download_kube_scheduler
 
 	# Container runtimes
 	download_containerd
@@ -41,6 +44,9 @@ main()
 	# Networking tools
 	download_cilium
 	download_cni_plugins
+
+	# Datastore
+	download_etcd
 
 	# Utility tools
 	download_jq

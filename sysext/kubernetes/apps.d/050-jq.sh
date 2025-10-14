@@ -7,9 +7,11 @@ download_jq()
 	version=$(resolve_version "${version}" "jqlang/jq") || return 0
 
 	local url="https://github.com/jqlang/jq/releases/download/${version}/jq-linux-${DOWNLOAD_ARCH}"
-	local dest="${OPT_BIN_DIR}/jq"
+	local dest="${JQ_DEST:-${OPT_BIN_DIR}/jq}"
 
 	log_info "Downloading jq ${version}..."
+
+	mkdir -p "$(dirname "${dest}")"
 
 	if download_file "${url}" "${dest}" "0755"; then
 		save_version "jq" "${version}"

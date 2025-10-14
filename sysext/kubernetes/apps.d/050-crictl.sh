@@ -7,9 +7,11 @@ download_crictl()
 	version=$(resolve_version "${version}" "kubernetes-sigs/cri-tools") || return 0
 
 	local url="https://github.com/kubernetes-sigs/cri-tools/releases/download/${version}/crictl-${version}-linux-${DOWNLOAD_ARCH}.tar.gz"
-	local dest="${BIN_DIR}/crictl"
+	local dest="${CRICTL_DEST:-${BIN_DIR}/crictl}"
 
 	log_info "Downloading crictl ${version}..."
+
+	mkdir -p "$(dirname "${dest}")"
 
 	local temp_dir
 	temp_dir=$(mktemp -d)

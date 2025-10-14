@@ -10,15 +10,16 @@ download_cni_plugins()
 	local clean_version="${version#v}"
 
 	local url="https://github.com/containernetworking/plugins/releases/download/${version}/cni-plugins-linux-${DOWNLOAD_ARCH}-${version}.tgz"
+	local cni_dir="${CNI_PLUGINS_DEST:-${SYSEXT_OVERLAY_DIR}/opt/cni/bin}"
 
 	log_info "Downloading CNI plugins ${version}..."
+	log_info "Downloading from ${url}..."
 
-	# Create CNI bin directory in /opt/cni/bin
-	local cni_dir="${SYSEXT_OVERLAY_DIR}/opt/cni/bin"
 	mkdir -p "${cni_dir}"
 
 	if curl -L "${url}" | tar -xz -C "${cni_dir}" 2> /dev/null; then
 		chmod 0755 "${cni_dir}"/* 2> /dev/null || true
+		log_info "Downloaded to ${cni_dir}"
 		save_version "cni-plugins" "${version}"
 		log_info "Successfully downloaded CNI plugins ${version}"
 		echo

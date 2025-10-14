@@ -14,9 +14,11 @@ download_envsubst()
 	esac
 
 	local url="https://github.com/a8m/envsubst/releases/download/${version}/envsubst-Linux-${envsubst_arch}"
-	local dest="${OPT_BIN_DIR}/envsubst"
+	local dest="${ENVSUBST_DEST:-${OPT_BIN_DIR}/envsubst}"
 
 	log_info "Downloading envsubst ${version}..."
+
+	mkdir -p "$(dirname "${dest}")"
 
 	if download_file "${url}" "${dest}" "0755"; then
 		save_version "envsubst" "${version}"
