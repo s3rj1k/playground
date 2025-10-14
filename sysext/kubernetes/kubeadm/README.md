@@ -7,7 +7,7 @@ Build and use a systemd sysext with Kubernetes tools.
 ## Build
 
 ```bash
-./download.sh
+../download.sh
 ./build-sysext.sh
 ./build-confext.sh
 ```
