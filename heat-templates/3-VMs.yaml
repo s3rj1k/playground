@@ -22,10 +22,11 @@ parameters:
   image_id:
     type: string
     description: "Image to use for the instances."
-    default: ubuntu-24.04-minimal-cloudimg-amd64
+    default: debian-13-generic-amd64
     label: "Server Image"
     constraints:
       - allowed_values:
+          - debian-13-generic-amd64
           - ubuntu-24.04-minimal-cloudimg-amd64
         description: "Must be a known Image ID"
 
