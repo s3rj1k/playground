@@ -1,0 +1,5 @@
+output/
+sysext-overlay/usr/lib/
+sysext-overlay/usr/local/bin/
+sysext-overlay/var/lib/k0s/bin/
+sysext-overlay/*.version
