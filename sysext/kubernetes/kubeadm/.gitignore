@@ -1,0 +1,5 @@
+output/
+sysext-overlay/*.version
+sysext-overlay/opt/kubernetes/bin/
+sysext-overlay/usr/bin/
+sysext-overlay/usr/lib/

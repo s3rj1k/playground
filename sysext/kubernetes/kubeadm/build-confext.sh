@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # Source all include files using wildcard
-for script in "${BASH_SOURCE[0]%/*}/common.d"/*.sh; do
+for script in "${BASH_SOURCE[0]%/*}/../common.d"/*.sh; do
 	[[ -f ${script} ]] && source "${script}"
 done
 
