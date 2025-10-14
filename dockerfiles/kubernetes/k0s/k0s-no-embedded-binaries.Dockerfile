@@ -40,9 +40,11 @@ RUN set -ex; . /.env; \
 FROM busybox:latest AS verify
 COPY --from=builder /workspace/k0s /tmp/k0s
 RUN /tmp/k0s version
+RUN /tmp/k0s version > /tmp/k0s.version
 
 FROM alpine:latest AS runtime
 RUN apk add --no-cache ca-certificates
 WORKDIR /
 COPY --from=verify /tmp/k0s /usr/local/bin/
+COPY --from=verify /tmp/k0s.version /usr/local/bin/
 ENTRYPOINT ["/usr/local/bin/k0s"]
