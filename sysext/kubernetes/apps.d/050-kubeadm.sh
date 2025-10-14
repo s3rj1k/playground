@@ -7,9 +7,11 @@ download_kubeadm()
 	version=$(resolve_version "${version}") || return 0
 
 	local url="https://dl.k8s.io/release/${version}/bin/linux/${DOWNLOAD_ARCH}/kubeadm"
-	local dest="${KUBERNETES_BIN_DIR}/kubeadm"
+	local dest="${KUBEADM_DEST:-${KUBERNETES_BIN_DIR}/kubeadm}"
 
 	log_info "Downloading kubeadm ${version}..."
+
+	mkdir -p "$(dirname "${dest}")"
 
 	if download_file "${url}" "${dest}" "0755"; then
 		save_version "kubeadm" "${version}"

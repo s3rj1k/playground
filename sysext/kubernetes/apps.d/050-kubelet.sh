@@ -7,9 +7,11 @@ download_kubelet()
 	version=$(resolve_version "${version}") || return 0
 
 	local url="https://dl.k8s.io/release/${version}/bin/linux/${DOWNLOAD_ARCH}/kubelet"
-	local dest="${BIN_DIR}/kubelet"
+	local dest="${KUBELET_DEST:-${BIN_DIR}/kubelet}"
 
 	log_info "Downloading kubelet ${version}..."
+
+	mkdir -p "$(dirname "${dest}")"
 
 	if download_file "${url}" "${dest}" "0755"; then
 		save_version "kubelet" "${version}"

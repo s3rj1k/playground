@@ -7,9 +7,11 @@ download_yq()
 	version=$(resolve_version "${version}" "mikefarah/yq") || return 0
 
 	local url="https://github.com/mikefarah/yq/releases/download/${version}/yq_linux_${DOWNLOAD_ARCH}"
-	local dest="${OPT_BIN_DIR}/yq"
+	local dest="${YQ_DEST:-${OPT_BIN_DIR}/yq}"
 
 	log_info "Downloading yq ${version}..."
+
+	mkdir -p "$(dirname "${dest}")"
 
 	if download_file "${url}" "${dest}" "0755"; then
 		save_version "yq" "${version}"

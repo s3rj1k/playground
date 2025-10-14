@@ -7,9 +7,11 @@ download_runc()
 	version=$(resolve_version "${version}" "opencontainers/runc") || return 0
 
 	local url="https://github.com/opencontainers/runc/releases/download/${version}/runc.${DOWNLOAD_ARCH}"
-	local dest="${BIN_DIR}/runc"
+	local dest="${RUNC_DEST:-${BIN_DIR}/runc}"
 
 	log_info "Downloading runc ${version}..."
+
+	mkdir -p "$(dirname "${dest}")"
 
 	if download_file "${url}" "${dest}" "0755"; then
 		save_version "runc" "${version}"

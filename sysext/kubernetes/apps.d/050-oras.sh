@@ -10,11 +10,16 @@ download_oras()
 	local clean_version="${version#v}"
 
 	local url="https://github.com/oras-project/oras/releases/download/${version}/oras_${clean_version}_linux_${DOWNLOAD_ARCH}.tar.gz"
+	local dest="${ORAS_DEST:-${OPT_BIN_DIR}/oras}"
 
 	log_info "Downloading oras ${version}..."
+	log_info "Downloading from ${url}..."
 
-	if curl -L "${url}" | tar -xzO "oras" > "${OPT_BIN_DIR}/oras"; then
-		chmod 0755 "${OPT_BIN_DIR}/oras"
+	mkdir -p "$(dirname "${dest}")"
+
+	if curl -L "${url}" | tar -xzO "oras" > "${dest}"; then
+		chmod 0755 "${dest}"
+		log_info "Downloaded to ${dest}"
 		save_version "oras" "${version}"
 		log_info "Successfully downloaded oras ${version}"
 		echo
