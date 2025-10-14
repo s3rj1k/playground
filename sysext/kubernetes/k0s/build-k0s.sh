@@ -44,7 +44,7 @@ log_info "Extracting k0s binary..."
 container_id=$(docker create "${K0S_IMAGE_TAG}")
 
 # Extract k0s binary and version file to sysext overlay
-dest_dir="${SYSEXT_OVERLAY_DIR}/usr/local/bin"
+dest_dir="${SYSEXT_OVERLAY_DIR}/usr/bin"
 mkdir -p "${dest_dir}"
 docker cp "${container_id}:/usr/local/bin/k0s" "${dest_dir}/k0s"
 docker cp "${container_id}:/usr/local/bin/k0s.version" "${SYSEXT_OVERLAY_DIR}/k0s.version"
