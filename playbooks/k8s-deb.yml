@@ -1,8 +1,37 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: MIT
 
-# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k8s-deb.yml
 # ref: https://philprime.dev/guides/building-a-production-ready-kubernetes-cluster-from-scratch/lesson-8
+# ref: https://littlechimera.com/posts/cilium-lb-cp-endpoint/
+#
+# DEBUG: ansible-playbook playbooks/k8s-deb.yml (for local files)
+#
+# Single control plane node:
+#   ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k8s-deb.yml
+#
+# HA control plane with Cilium L2 LoadBalancer:
+#   # First CP node:
+#   ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k8s-deb.yml -e CP_LB_IP=192.168.42.42
+#
+#   # Generate join command on first CP node:
+#   kubeadm token create --print-join-command --certificate-key $(kubeadm init phase upload-certs --upload-certs | tail -1)
+#
+#   # Additional CP nodes (use JSON format for ansible -e with values containing spaces):
+#   ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k8s-deb.yml \
+#     -e CP_LB_IP=192.168.42.42 \
+#     -e '{"CP_JOIN_DATA": "kubeadm join <CP_LB_IP>.nip.io:6443 --token <token> --discovery-token-ca-cert-hash <hash> --control-plane --certificate-key <key>"}'
+#
+# Worker nodes:
+#   # Generate join command on any CP node:
+#   kubeadm token create --print-join-command
+#
+#   # Join worker (use JSON format for ansible -e with values containing spaces):
+#   # NOTE: For HA setups, use <CP_LB_IP>.nip.io:6443 (not raw IP)
+#   ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k8s-deb.yml \
+#     -e '{"WORKER_DATA": "kubeadm join <CP_LB_IP>.nip.io:6443 --token <token> --discovery-token-ca-cert-hash <hash>"}'
+#
+# Find which node holds the Cilium L2 VIP:
+#   kubectl get lease cilium-l2announce-kube-system-kubernetes-external -n kube-system -o jsonpath='{.spec.holderIdentity}{"\n"}'
 
 ---
 - name: Kubernetes (k8s) on Debian AMD64
@@ -12,12 +41,15 @@
   gather_facts: true
   ignore_errors: false
   vars:
-    KUBERNETES_VERSION: "v1.33"
-    CRIO_VERSION: "v1.33"
+    KUBERNETES_VERSION: "v1.34"
+    CRIO_VERSION: "v1.34"
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
+    CP_LB_IP: ""
+    CP_JOIN_DATA: ""
     REGISTRY_MIRROR: ""
     WORKER_DATA: ""
+    MANIFESTS_DIR: "/etc/kubernetes/manifests.d"
 
   pre_tasks:
     - name: Check if system is supported
@@ -35,6 +67,13 @@
         - name: Get OS version
           debug:
             msg: "Running on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+
+        - name: Check for conflicting join data
+          fail:
+            msg: "Cannot specify both CP_JOIN_DATA and WORKER_DATA. Use only one."
+          when:
+            - CP_JOIN_DATA is defined and CP_JOIN_DATA | trim | length > 0
+            - WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
     - name: Wait for system to be ready
       wait_for:
@@ -105,6 +144,7 @@
             - plymouth-start.service
             - snapd.mounts-pre.target
             - snapd.seeded.service
+          ignore_errors: true
 
     - name: Remove system users and groups
       block:
@@ -245,7 +285,7 @@
             version: "{{ release_info.json.tag_name }}"
           when: release_info is defined and release_info.status == 200
 
-        - name: Download and Install clusterctl binary ({{ version }})
+        - name: Download and Install clusterctl binary {{ version | default('') }}
           get_url:
             url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ version }}/clusterctl-linux-amd64"
             dest: /usr/local/bin/clusterctl
@@ -475,6 +515,15 @@
     - name: Configure CRI-O
       # https://github.com/cri-o/cri-o/blob/main/README.md#configuration
       block:
+        - name: Disable short name mode enforcement in CRI-O
+          copy:
+            dest: /etc/crio/crio.conf.d/20-shortnames.conf
+            content: |
+              [crio.image]
+              short_name_mode = "disabled"
+            mode: "0644"
+          notify: Restart crio
+
         - name: Create CRI-O registries mirror configuration
           copy:
             dest: /etc/containers/registries.conf.d/mirror.conf
@@ -507,8 +556,22 @@
           when: REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0
           notify: Restart crio
 
-    - name: Initialize Kubernetes Control Plane
+    - name: Prepare Control Plane Node
       block:
+        - name: Enable and start Kubelet service
+          systemd:
+            name: kubelet
+            enabled: yes
+            state: started
+            daemon_reload: yes
+
+        - name: Enable and start CRI-O service
+          systemd:
+            name: crio
+            enabled: yes
+            state: started
+            daemon_reload: yes
+
         - name: Extract latest patch release for {{ KUBERNETES_VERSION }}
           shell: |
             curl -s --fail "https://api.github.com/repos/kubernetes/kubernetes/releases" | tr -d '\000-\037' | jq -r '
@@ -540,6 +603,46 @@
             - k8s_releases_filtered is defined
             - k8s_releases_filtered | trim | length == 0
 
+        - name: Create .kube directory for root user
+          file:
+            path: /root/.kube
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Create symlink from admin.conf to .kube/config
+          file:
+            src: /etc/kubernetes/admin.conf
+            dest: /root/.kube/config
+            state: link
+            force: true
+            follow: false
+
+        - name: Check if Kubernetes cluster is already running
+          command: kubectl get nodes
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: kubectl_get_nodes
+          changed_when: false
+          failed_when: false
+
+        - name: Reset Kubernetes Control Plane if needed
+          command: kubeadm reset --force
+          register: kubeadm_reset
+          changed_when: true
+          failed_when: false
+          when: kubectl_get_nodes.rc != 0
+      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+
+    - name: Initialize First Control Plane Node
+      block:
+        - name: Create manifests directory
+          file:
+            path: "{{ MANIFESTS_DIR }}"
+            state: directory
+            mode: "0755"
+
         - name: Create kubeadm configuration directory
           file:
             path: /etc/kubeadm
@@ -563,6 +666,9 @@
               apiVersion: kubeadm.k8s.io/v1beta4
               kind: ClusterConfiguration
               kubernetesVersion: {{ version }}
+              {% if CP_LB_IP is defined and CP_LB_IP | trim | length > 0 %}
+              controlPlaneEndpoint: "{{ CP_LB_IP }}.nip.io:6443"
+              {% endif %}
               ---
               apiVersion: kubelet.config.k8s.io/v1beta1
               kind: KubeletConfiguration
@@ -572,34 +678,12 @@
             mode: "0644"
           when: version is defined and version | trim | length > 0
 
-        - name: Enable and start Kubelet service
-          systemd:
-            name: kubelet
-            enabled: yes
-            state: started
-            daemon_reload: yes
-
-        - name: Enable and start CRI-O service
-          systemd:
-            name: crio
-            enabled: yes
-            state: started
-            daemon_reload: yes
-
-        - name: Check if Kubernetes cluster is already running
-          command: kubectl get nodes
-          environment:
-            KUBECONFIG: /etc/kubernetes/admin.conf
-          register: kubectl_get_nodes
-          changed_when: false
-          failed_when: false
-
-        - name: Reset Kubernetes Control Plane if needed
-          command: kubeadm reset --force
-          register: kubeadm_reset
-          changed_when: true
-          failed_when: false
-          when: kubectl_get_nodes.rc != 0
+        - name: Add control plane endpoint to /etc/hosts for localhost access
+          lineinfile:
+            path: /etc/hosts
+            line: "127.0.0.1 {{ CP_LB_IP }}.nip.io"
+            state: present
+          when: CP_LB_IP is defined and CP_LB_IP | trim | length > 0
 
         - name: Initialize the Kubernetes Control Plane
           command: kubeadm init --config=/etc/kubeadm/init.yaml
@@ -611,21 +695,6 @@
           changed_when: true
           failed_when: kubeadm_init.rc != 0
           when: kubectl_get_nodes.rc != 0
-
-        - name: Create .kube directory for root user
-          file:
-            path: /root/.kube
-            state: directory
-            owner: root
-            group: root
-            mode: "0700"
-
-        - name: Create symlink from admin.conf to .kube/config
-          file:
-            src: /etc/kubernetes/admin.conf
-            dest: /root/.kube/config
-            state: link
-            force: true
 
         - name: Check if Control Plane taint exists
           shell: kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes -o jsonpath='{.items[*].spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")].key}'
@@ -642,7 +711,9 @@
           changed_when: remove_taint.rc == 0
           failed_when: false
           when: taint_check.stdout | length > 0
-      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+      when:
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+        - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
 
     # Install Cilium as CNI (https://docs.cilium.io/en/stable/gettingstarted/k8s-install-default/)
     - name: Install Cilium CNI
@@ -669,7 +740,7 @@
             cilium_version: "{{ cilium_stable.content | trim }}"
           when: cilium_stable is defined and cilium_stable.status == 200
 
-        - name: Download and install Cilium CLI {{ cilium_cli_version }}
+        - name: Download and install Cilium CLI {{ cilium_cli_version | default('') }}
           shell: |
             curl -L --fail https://github.com/cilium/cilium-cli/releases/download/{{ cilium_cli_version }}/cilium-linux-amd64.tar.gz | \
             tar xzf - -C /usr/local/bin
@@ -695,8 +766,19 @@
           failed_when: false
           when: cilium_cli_version is defined and cilium_cli_version | trim | length > 0
 
-        - name: Install Cilium {{ cilium_version }} if not already installed
-          command: cilium install --version {{ cilium_version }} --kubeconfig /etc/kubernetes/admin.conf
+        - name: Install Cilium {{ cilium_version | default('') }} if not already installed
+          command: >
+            cilium install
+            --version {{ cilium_version }}
+            --kubeconfig /etc/kubernetes/admin.conf
+            --set kubeProxyReplacement=true
+            --set l2announcements.enabled=true
+            --set k8sClientRateLimit.qps=10
+            --set k8sClientRateLimit.burst=30
+            {% if CP_LB_IP is defined and CP_LB_IP | trim | length > 0 %}
+            --set k8sServiceHost={{ CP_LB_IP }}.nip.io
+            --set k8sServicePort=6443
+            {% endif %}
           environment:
             KUBECONFIG: /etc/kubernetes/admin.conf
             HOME: /root
@@ -720,13 +802,15 @@
           retries: 5
           delay: 30
           when: cilium_cli_version is defined and cilium_cli_version | trim | length > 0
-      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+      when:
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+        - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
 
     - name: Configure LB
       block:
         - name: Create CiliumLoadBalancerIPPool
           copy:
-            dest: /root/lb-config.yaml
+            dest: "{{ MANIFESTS_DIR }}/cilium-lb-pool.yaml"
             content: |
               apiVersion: cilium.io/v2alpha1
               kind: CiliumLoadBalancerIPPool
@@ -739,7 +823,7 @@
             mode: "0644"
 
         - name: Apply CiliumLoadBalancerIPPool configuration
-          command: kubectl apply -f /root/lb-config.yaml
+          command: kubectl apply -f {{ MANIFESTS_DIR }}/cilium-lb-pool.yaml
           environment:
             KUBECONFIG: /etc/kubernetes/admin.conf
           register: apply_result
@@ -748,8 +832,106 @@
           delay: 30
       when:
         - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+        - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
         - LB_IP_RANGE_START | default("") | length > 0
         - LB_IP_RANGE_STOP | default("") | length > 0
+
+    - name: Configure Control Plane LoadBalancer Endpoint
+      block:
+        - name: Create CiliumLoadBalancerIPPool for API server
+          copy:
+            dest: "{{ MANIFESTS_DIR }}/cilium-cp-lb-pool.yaml"
+            content: |
+              apiVersion: cilium.io/v2alpha1
+              kind: CiliumLoadBalancerIPPool
+              metadata:
+                name: api-server-pool
+              spec:
+                blocks:
+                  - cidr: "{{ CP_LB_IP }}/32"
+            mode: "0644"
+
+        - name: Apply CiliumLoadBalancerIPPool for API server
+          command: kubectl apply -f {{ MANIFESTS_DIR }}/cilium-cp-lb-pool.yaml
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: apply_pool_result
+          until: apply_pool_result.rc == 0
+          retries: 5
+          delay: 30
+
+        - name: Create CiliumL2AnnouncementPolicy for control plane
+          copy:
+            dest: "{{ MANIFESTS_DIR }}/cilium-cp-l2-policy.yaml"
+            content: |
+              apiVersion: cilium.io/v2alpha1
+              kind: CiliumL2AnnouncementPolicy
+              metadata:
+                name: control-plane
+              spec:
+                serviceSelector:
+                  matchLabels:
+                    component: apiserver
+                    provider: kubernetes
+                nodeSelector:
+                  matchExpressions:
+                    - key: node-role.kubernetes.io/control-plane
+                      operator: Exists
+                interfaces:
+                  - ^eno[0-9]+
+                  - ^enp[0-9]+
+                  - ^ens[0-9]+
+                  - ^eth[0-9]+
+                loadBalancerIPs: true
+            mode: "0644"
+
+        - name: Apply CiliumL2AnnouncementPolicy for control plane
+          command: kubectl apply -f {{ MANIFESTS_DIR }}/cilium-cp-l2-policy.yaml
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: apply_policy_result
+          until: apply_policy_result.rc == 0
+          retries: 5
+          delay: 30
+
+        - name: Create kubernetes-external LoadBalancer Service
+          copy:
+            dest: "{{ MANIFESTS_DIR }}/cilium-cp-lb-service.yaml"
+            content: |
+              apiVersion: v1
+              kind: Service
+              metadata:
+                annotations:
+                  io.cilium/lb-ipam-ips: "{{ CP_LB_IP }}"
+                labels:
+                  component: apiserver
+                  provider: kubernetes
+                name: kubernetes-external
+                namespace: kube-system
+              spec:
+                selector:
+                  component: kube-apiserver
+                  tier: control-plane
+                ports:
+                  - name: https
+                    port: 6443
+                    protocol: TCP
+                    targetPort: 6443
+                type: LoadBalancer
+            mode: "0644"
+
+        - name: Apply kubernetes-external LoadBalancer Service
+          command: kubectl apply -f {{ MANIFESTS_DIR }}/cilium-cp-lb-service.yaml
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: apply_service_result
+          until: apply_service_result.rc == 0
+          retries: 5
+          delay: 30
+      when:
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+        - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
+        - CP_LB_IP is defined and CP_LB_IP | trim | length > 0
 
     - name: Configure Local Path Provisioner
       block:
@@ -765,7 +947,7 @@
             version: "{{ release_info.json.tag_name }}"
           when: release_info is defined and release_info.status == 200
 
-        - name: Apply Local Path Provisioner manifest ({{ version }})
+        - name: Apply Local Path Provisioner manifest {{ version | default('') }}
           command: kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ version }}/deploy/local-path-storage.yaml
           environment:
             KUBECONFIG: /etc/kubernetes/admin.conf
@@ -785,6 +967,86 @@
           delay: 30
       when:
         - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+        - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
+
+    - name: Cleanup /etc/hosts bootstrap hack
+      block:
+        - name: Wait for Cilium LB to assign external IP
+          shell: |
+            kubectl get svc kubernetes-external -n kube-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: lb_ip
+          changed_when: false
+          until: lb_ip.stdout == CP_LB_IP
+          retries: 30
+          delay: 10
+
+        - name: Remove /etc/hosts bootstrap hack after Cilium LB is ready
+          lineinfile:
+            path: /etc/hosts
+            line: "127.0.0.1 {{ CP_LB_IP }}.nip.io"
+            state: absent
+      when:
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+        - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
+        - CP_LB_IP is defined and CP_LB_IP | trim | length > 0
+
+    - name: Join as Additional Control Plane Node
+      block:
+        - name: Join the Kubernetes cluster as control plane node
+          command: "{{ CP_JOIN_DATA }}"
+          args:
+            creates: /etc/kubernetes/admin.conf
+          register: cp_join
+          changed_when: true
+          failed_when: cp_join.rc != 0
+          until: cp_join is succeeded
+          retries: 5
+          delay: 30
+
+        - name: Wait for node to be registered
+          command: kubectl get node {{ ansible_hostname }}
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: node_registered
+          changed_when: false
+          until: node_registered.rc == 0
+          retries: 30
+          delay: 10
+
+        - name: Remove taint from this control plane node
+          command: kubectl taint nodes {{ ansible_hostname }} node-role.kubernetes.io/control-plane- --overwrite
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: remove_taint
+          changed_when: remove_taint.rc == 0
+          failed_when: false
+      when: CP_JOIN_DATA is defined and CP_JOIN_DATA | trim | length > 0
+
+    - name: Reset Worker Node if needed
+      block:
+        - name: Check if kubelet.conf exists
+          stat:
+            path: /etc/kubernetes/kubelet.conf
+          register: kubelet_conf
+
+        - name: Check if node can reach API server
+          command: kubectl get nodes
+          environment:
+            KUBECONFIG: /etc/kubernetes/kubelet.conf
+          register: kubectl_check
+          changed_when: false
+          failed_when: false
+          when: kubelet_conf.stat.exists
+
+        - name: Reset Kubernetes if node cannot reach API server
+          command: kubeadm reset --force
+          register: kubeadm_reset
+          changed_when: true
+          failed_when: false
+          when: kubelet_conf.stat.exists and kubectl_check.rc != 0
+      when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
     - name: Initialize Kubernetes Worker Node
       block:
@@ -804,6 +1066,8 @@
 
         - name: Join the Kubernetes cluster as worker node
           command: "{{ WORKER_DATA }}"
+          args:
+            creates: /etc/kubernetes/kubelet.conf
           register: worker_join
           changed_when: true
           failed_when: worker_join.rc != 0
@@ -818,6 +1082,7 @@
         masked: yes
       loop:
         - display-manager.service
+      ignore_errors: true
 
     - name: Handle system reboot check
       block:
