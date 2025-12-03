@@ -395,7 +395,6 @@ install_tinkerbell()
 		--set "artifactsFileServer=$TINKERBELL_ARTIFACTS_SERVER" \
 		--set "optional.hookos.enabled=true" \
 		--set "deployment.envs.smee.isoUpstreamURL=$HOOKOS_ISO_URL" \
-		--set "deployment.envs.smee.ipxeHttpScriptExtraKernelArgs={console=tty0,console=ttyS0\,115200n8,linuxkit.runc_console=1,linuxkit.runc_debug=1}" \
 		--set "deployment.envs.smee.osieURL=http://${TINKERBELL_LB_IP}:7171" \
 		--set "deployment.envs.globals.logLevel=3"; then
 		echo "Error: Failed to install Tinkerbell"
