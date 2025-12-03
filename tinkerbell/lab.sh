@@ -265,7 +265,7 @@ set_network_ips()
 
 	KIND_NETWORK_INFO=$(docker network inspect kind)
 	KIND_SUBNET=$(echo "$KIND_NETWORK_INFO" | jq -r '.[0].IPAM.Config[] | select(.Subnet | contains(".")) | .Subnet')
-	KIND_GATEWAY=$(echo "$KIND_NETWORK_INFO" | jq -r '.[0].IPAM.Config[] | select(.Gateway) | .Gateway')
+	KIND_GATEWAY=$(echo "$KIND_NETWORK_INFO" | jq -r '[.[0].IPAM.Config[] | select(.Gateway) | .Gateway | select(test("^[0-9]+\\."))] | first')
 
 	if [ -z "$KIND_SUBNET" ] || [ -z "$KIND_GATEWAY" ]; then
 		echo "Error: Failed to get Kind network configuration"
