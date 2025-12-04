@@ -1,7 +1,7 @@
-# wget https://download.opensuse.org/repositories/isv:/cri-o:/stable:/v1.33/deb/Release.key -O /etc/apt/keyrings/crio.asc
+# wget https://download.opensuse.org/repositories/isv:/cri-o:/stable:/v1.34/deb/Release.key -O /etc/apt/keyrings/crio.asc
 X-Repolib-Name: crio
 Types: deb
-URIs: https://download.opensuse.org/repositories/isv:/cri-o:/stable:/v1.33/deb/
+URIs: https://download.opensuse.org/repositories/isv:/cri-o:/stable:/v1.34/deb/
 Signed-By: /etc/apt/keyrings/crio.asc
 Suites: /
 Architectures: amd64

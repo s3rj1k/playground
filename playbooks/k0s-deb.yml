@@ -12,7 +12,7 @@
   gather_facts: true
   ignore_errors: false
   vars:
-    K0S_MAJOR_MINOR_VERSION: "1.33"
+    K0S_MAJOR_MINOR_VERSION: "1.34"
     ENABLE_DYNAMIC_CONFIG: false
     K0S_EXTRA_FLAGS: "--disable-components=konnectivity-server"
     LB_IP_RANGE_START: ""
