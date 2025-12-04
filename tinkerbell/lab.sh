@@ -32,8 +32,8 @@ parse_args()
 			-h | --help)
 				echo "Usage: $0 [OPTIONS]"
 				echo "Options:"
-				echo "  --cleanup-only     Only perform cleanup and exit"
-				echo "  -h, --help         Show this help message"
+				echo "  --cleanup-only          Only perform cleanup and exit"
+				echo "  -h, --help              Show this help message"
 				exit 0
 				;;
 			*)
@@ -65,18 +65,24 @@ set_config()
 	# See: https://github.com/tinkerbell/tinkerbell/issues/300
 	HOOKOS_ISO_URL="${HOOKOS_DOWNLOAD_URL}/hook-x86_64-efi-initrd.iso"
 
-	# Template names
-	TEMPLATE_NAME="ubuntu-nokexec"
+	# OS Image Configuration
+	UBUNTU_OCI_IMAGE="${UBUNTU_OCI_IMAGE:-ghcr.io/s3rj1k/playground/ubuntu-2404:v1.34.2.gz}"
+
+	# Template name
+	TEMPLATE_NAME="ubuntu"
 
 	# VM Configuration
 	VM1_NAME="vm1"
 	VM1_MAC="52:54:00:12:34:01"
 	VM2_NAME="vm2"
 	VM2_MAC="52:54:00:12:34:02"
+	VM3_NAME="vm3"
+	VM3_MAC="52:54:00:12:34:03"
 
 	# Redfish Configuration
 	REDFISH_PORT="8000"
 	REDFISH_PASS_BASE64=$(cat ~/.redfish_password | base64)
+	BMC_PORT="623"
 }
 
 # Check if required binaries are available
@@ -199,15 +205,15 @@ cleanup_all()
 setup_kind_config()
 {
 	echo -e "\nCreating KinD config with registry: ${IMAGE_REGISTRY}"
-	mkdir -p $HOME/.kind/
+	mkdir -p "$HOME"/.kind/
 
-	cat << EOF > $HOME/.kind/default_hosts.toml
+	cat << EOF > "$HOME"/.kind/default_hosts.toml
 [host."https://${IMAGE_REGISTRY}"]
   capabilities = ["pull", "resolve"]
   # skip_verify = true
 EOF
 
-	cat << 'EOF' > $HOME/.kind/config
+	cat << 'EOF' > "$HOME"/.kind/config
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 networking:
@@ -344,7 +350,7 @@ get_tinkerbell_version()
 	fi
 
 	echo -e "\nFetching latest Tinkerbell chart version ..."
-	TINKERBELL_CHART_VERSION=$(basename $(curl -Ls -o /dev/null -w %{url_effective} https://github.com/tinkerbell/tinkerbell/releases/latest))
+	TINKERBELL_CHART_VERSION=$(basename "$(curl -Ls -o /dev/null -w '%{url_effective}' https://github.com/tinkerbell/tinkerbell/releases/latest)")
 
 	if [ -z "$TINKERBELL_CHART_VERSION" ]; then
 		echo "Error: Failed to fetch Tinkerbell chart version"
@@ -409,7 +415,8 @@ install_tinkerbell()
 create_redfish_secret()
 {
 	local node_name=$1
-	local redfish_user_base64=$(echo -n "admin" | base64)
+	local redfish_user_base64
+	redfish_user_base64=$(echo -n "admin" | base64)
 
 	echo -e "\nCreating Redfish BMC secret: $node_name"
 
@@ -451,10 +458,14 @@ spec:
     providerOptions:
       preferredOrder:
         - gofish
+        - ipmitool
       redfish:
         port: $REDFISH_PORT
         useBasicAuth: true
         systemName: $node_name
+      ipmitool:
+        cipherSuite: "3"
+        port: $BMC_PORT
 EOF
 
 	echo "Redfish BMC machine created for $node_name"
@@ -470,7 +481,8 @@ create_hardware()
 
 	echo -e "\nCreating hardware configuration for $node_name (role: $node_role)"
 
-	local node_ip=$(awk -F"." '{print $1"."$2"."$3"."($4+'$ip_offset')}' <<< "$NODE_IP_BASE")
+	local node_ip
+	node_ip=$(awk -F"." '{print $1"."$2"."$3"."($4+'"$ip_offset"')}' <<< "$NODE_IP_BASE")
 
 	cat << EOF | kubectl apply -f -
 apiVersion: tinkerbell.org/v1alpha1
@@ -522,8 +534,8 @@ spec:
       id: $node_mac
       operating_system:
         distro: "ubuntu"
-        os_slug: "ubuntu_22_04"
-        version: "22.04"
+        os_slug: "ubuntu_24_04"
+        version: "24.04"
 EOF
 
 	echo "Hardware configuration created for $node_name (IP: $node_ip)"
@@ -540,11 +552,11 @@ create_vm()
 	virt-install \
 		--name "$node_name" \
 		--description "VM" \
-		--vcpus "2" \
-		--ram "2048" \
+		--vcpus "6" \
+		--ram "6144" \
 		--os-variant "ubuntu22.04" \
 		--connect "qemu:///system" \
-		--disk "path=/var/lib/libvirt/images/${node_name}-disk.img,bus=virtio,size=25,sparse=yes" \
+		--disk "path=/var/lib/libvirt/images/${node_name}-disk.img,bus=virtio,size=60,sparse=yes" \
 		--disk "device=cdrom,bus=sata" \
 		--network "bridge:$BRIDGE_NAME,mac=$mac_address" \
 		--console "pty,target.type=virtio" \
@@ -575,9 +587,16 @@ create_vms()
 	create_redfish_machine "$VM2_NAME"
 	create_hardware "worker" "$VM2_NAME" "$VM2_MAC" 2
 
+	# VM3 - netboot mode
+	create_vm "$VM3_NAME" "$VM3_MAC"
+	create_redfish_secret "$VM3_NAME"
+	create_redfish_machine "$VM3_NAME"
+	create_hardware "worker" "$VM3_NAME" "$VM3_MAC" 3
+
 	echo -e "\nVMs and BMC resources created successfully:"
 	echo "VM1: $VM1_NAME ($VM1_MAC) - netboot mode with Redfish BMC"
 	echo "VM2: $VM2_NAME ($VM2_MAC) - CD boot mode with Redfish BMC"
+	echo "VM3: $VM3_NAME ($VM3_MAC) - netboot (customboot) mode with Redfish BMC"
 	echo "Bridge: $BRIDGE_NAME"
 	echo "Redfish IP: $REDFISH_IP (Port: $REDFISH_PORT)"
 	echo "Gateway IP: $GATEWAY_IP"
@@ -588,8 +607,10 @@ create_vms()
 create_template()
 {
 	local template_name=$1
+	local image_filename=$2
 
 	echo -e "\nCreating Template: $template_name for Tinkerbell (no-kexec) ..."
+	echo "Using image: $image_filename"
 
 	# Build the actions array
 	local actions_yaml=""
@@ -602,7 +623,7 @@ create_template()
             timeout: 600
             environment:
               DEST_DISK: {{ index .Hardware.Disks 0 }}
-              IMG_URL: "'$TINKERBELL_ARTIFACTS_SERVER'/jammy-server-cloudimg-amd64.raw.gz"
+              IMG_URL: "'$TINKERBELL_ARTIFACTS_SERVER'/'$image_filename'"
               COMPRESSED: true'
 
 	# Sync and Grow Partition action
@@ -612,11 +633,11 @@ create_template()
             image: quay.io/tinkerbell/actions/cexec:latest
             timeout: 90
             environment:
-              BLOCK_DEVICE: {{ index .Hardware.Disks 0 }}1
+              BLOCK_DEVICE: {{ index .Hardware.Disks 0 }}3
               FS_TYPE: ext4
               CHROOT: y
               DEFAULT_INTERPRETER: "/bin/sh -c"
-              CMD_LINE: "sync && growpart {{ index .Hardware.Disks 0 }} 1 && resize2fs {{ index .Hardware.Disks 0 }}1 && sync"'
+              CMD_LINE: "sync && growpart {{ index .Hardware.Disks 0 }} 3 && resize2fs {{ index .Hardware.Disks 0 }}3 && sync"'
 
 	# Add Cloud-Init Config action
 	actions_yaml+='
@@ -633,7 +654,7 @@ create_template()
                 manage_etc_hosts: localhost
                 warnings:
                   dsid_missing_source: off
-              DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 1 }}
+              DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
               DEST_PATH: /etc/cloud/cloud.cfg.d/10_tinkerbell.cfg
               DIRMODE: "0700"
               FS_TYPE: ext4
@@ -648,7 +669,7 @@ create_template()
             image: quay.io/tinkerbell/actions/writefile:latest
             timeout: 90
             environment:
-              DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 1 }}
+              DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
               FS_TYPE: ext4
               DEST_PATH: /etc/cloud/ds-identify.cfg
               UID: 0
@@ -665,7 +686,7 @@ create_template()
             image: quay.io/tinkerbell/actions/writefile:latest
             timeout: 90
             environment:
-              DEST_DISK: {{ index .Hardware.Disks 0 }}1
+              DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
               FS_TYPE: ext4
               DEST_PATH: /etc/netplan/config.yaml
               CONTENTS: |
@@ -681,6 +702,20 @@ create_template()
               GID: 0
               MODE: 0644
               DIRMODE: 0755'
+
+	# Shutdown action
+	actions_yaml+='
+
+          - name: "Shutdown host"
+            image: ghcr.io/jacobweinstock/waitdaemon:latest
+            timeout: 90
+            pid: host
+            command: ["poweroff"]
+            environment:
+              IMAGE: alpine
+              WAIT_SECONDS: 10
+            volumes:
+              - /var/run/docker.sock:/var/run/docker.sock'
 
 	# Create the complete YAML
 	cat << EOF | kubectl apply -f -
@@ -712,81 +747,62 @@ create_templates()
 {
 	echo -e "\nCreating template ..."
 
-	create_template "$TEMPLATE_NAME"
+	create_template "$TEMPLATE_NAME" "ubuntu.raw.gz"
 
 	echo -e "\nTemplate created successfully:"
-	echo "  - $TEMPLATE_NAME (no-kexec)"
+	echo "  - $TEMPLATE_NAME"
 }
 
 # Create image download resources
 create_image_download()
 {
-	echo -e "\nCreating image download resources ..."
-
-	echo -e "\nCreating ConfigMap for image download script ..."
-	cat << EOF | kubectl apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: download-image
-  namespace: $NAMESPACE
-data:
-  entrypoint.sh: |-
-    #!/usr/bin/env bash
-    # This script is designed to download a cloud image file (.img) and then convert it to a .raw.gz file.
-    # This is purpose built so non-raw cloud image files can be used with the "image2disk" action.
-    set -euxo pipefail
-    if ! which pigz qemu-img &>/dev/null; then
-    	apk add --update pigz qemu-img
-    fi
-    image_url=\$1
-    file=\$2/\${image_url##*/}
-    file=\${file%.*}.raw.gz
-    if [[ ! -f "\$file" ]]; then
-    	wget "\$image_url" -O image.img
-    	qemu-img convert -O raw image.img image.raw
-    	pigz < image.raw > "\$file"
-    	rm -f image.img image.raw
-    fi
-EOF
-
-	echo -e "\nCreating Job to download Ubuntu Jammy image ..."
+	echo -e "\nCreating Job to download Ubuntu image from OCI registry ..."
 	cat << EOF | kubectl apply -f -
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: download-ubuntu-jammy
+  name: download-ubuntu
   namespace: $NAMESPACE
 spec:
   template:
     spec:
       containers:
-        - name: download-ubuntu-jammy
-          image: bash:latest
-          command: ["/script/entrypoint.sh"]
+        - name: download-ubuntu
+          image: ghcr.io/oras-project/oras:v1.3.0
+          command: ["/bin/sh"]
           args:
-            [
-              "https://cloud-images.ubuntu.com/daily/server/jammy/current/jammy-server-cloudimg-amd64.img",
-              "/output",
-            ]
+            - -c
+            - |
+              set -eux
+
+              OUTPUT_DIR="/output"
+              OUTPUT_FILE="ubuntu.raw.gz"
+              OCI_IMAGE="$UBUNTU_OCI_IMAGE"
+
+              if [ -f "\${OUTPUT_DIR}/\${OUTPUT_FILE}" ]; then exit 0; fi
+
+              mkdir -p "\${OUTPUT_DIR}"
+              cd "\${OUTPUT_DIR}"
+              oras pull "\${OCI_IMAGE}" -o .
+
+              DOWNLOADED_FILE=\$(find . \( -name "*ubuntu*.gz" -o -name "*kube*.gz" \) -type f | head -1)
+              if [ -n "\${DOWNLOADED_FILE}" ] && [ ! -f "\${OUTPUT_FILE}" ]; then
+                  mv "\${DOWNLOADED_FILE}" "\${OUTPUT_FILE}"
+              fi
+
+              find . -type d -empty -delete 2>/dev/null || true
           volumeMounts:
             - mountPath: /output
               name: hook-artifacts
-            - mountPath: /script
-              name: configmap-volume
       restartPolicy: OnFailure
       volumes:
         - name: hook-artifacts
           hostPath:
             path: /tmp
             type: DirectoryOrCreate
-        - name: configmap-volume
-          configMap:
-            defaultMode: 0700
-            name: download-image
 EOF
 
-	echo -e "\nImage download resources created successfully"
+	echo -e "\nUbuntu image download job created"
 }
 
 # Wait for image download job to complete
@@ -794,21 +810,12 @@ wait_for_image_download()
 {
 	echo -e "\nWaiting for Ubuntu image download to complete ..."
 
-	if kubectl wait --for=condition=complete job/download-ubuntu-jammy -n $NAMESPACE --timeout=1200s; then
+	if kubectl wait --for=condition=complete job/download-ubuntu -n $NAMESPACE --timeout=1200s; then
 		echo "Ubuntu image download completed successfully"
 		return 0
 	else
-		local job_failed=$(kubectl get job download-ubuntu-jammy -n $NAMESPACE -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2> /dev/null || echo "")
-		if [ "$job_failed" = "True" ]; then
-			echo "Ubuntu image download failed"
-		else
-			echo "Timeout waiting for image download (20 minutes)"
-		fi
-
-		echo "Job status:"
-		kubectl get job download-ubuntu-jammy -n $NAMESPACE
-		echo "Recent job logs:"
-		kubectl logs job/download-ubuntu-jammy -n $NAMESPACE --tail=10
+		echo "Ubuntu image download failed"
+		kubectl logs job/download-ubuntu -n $NAMESPACE --tail=10 2>/dev/null || true
 		return 1
 	fi
 }
@@ -867,7 +874,8 @@ create_workflow_isoboot()
 	echo "Boot mode: isoboot (ISO mounted via BMC virtual media)"
 
 	# Convert MAC address to dash-delimited format for ISO URL
-	local mac_dashed=$(echo "$vm_mac" | tr ':' '-')
+	local mac_dashed
+	mac_dashed=$(echo "$vm_mac" | tr ':' '-')
 
 	cat << EOF | kubectl apply -f -
 apiVersion: "tinkerbell.org/v1alpha1"
@@ -890,16 +898,47 @@ EOF
 	echo "ISO URL: http://${TINKERBELL_LB_IP}:7171/iso/${mac_dashed}/hook.iso"
 }
 
+# Create a single workflow for a VM (netboot mode)
+create_workflow_netboot()
+{
+	local vm_name=$1
+	local vm_mac=$2
+	local template_name=$3
+
+	echo -e "\nCreating netboot workflow for $vm_name using template $template_name ..."
+	echo "Boot mode: netboot"
+
+	cat << EOF | kubectl apply -f -
+apiVersion: "tinkerbell.org/v1alpha1"
+kind: Workflow
+metadata:
+  name: ${vm_name}-netboot-workflow
+  namespace: $NAMESPACE
+spec:
+  disabled: true
+  templateRef: $template_name
+  hardwareRef: $vm_name
+  hardwareMap:
+    device_1: $vm_mac
+  bootOptions:
+    bootMode: netboot
+EOF
+
+	echo "Netboot workflow ${vm_name}-netboot-workflow created with template $template_name"
+}
+
 create_workflows()
 {
 	echo -e "\nCreating Tinkerbell workflows for VM provisioning ..."
 
-	create_workflow_customboot "$VM1_NAME" "$VM1_MAC" "$TEMPLATE_NAME"
+	create_workflow_netboot "$VM1_NAME" "$VM1_MAC" "$TEMPLATE_NAME"
 	create_workflow_isoboot "$VM2_NAME" "$VM2_MAC" "$TEMPLATE_NAME"
+	create_workflow_customboot "$VM3_NAME" "$VM3_MAC" "$TEMPLATE_NAME"
 
 	echo -e "\nWorkflows created successfully:"
-	echo "${VM1_NAME}-customboot-workflow (customboot) -> Hardware: $VM1_NAME (MAC: $VM1_MAC) -> Template: $TEMPLATE_NAME"
+	echo "${VM1_NAME}-netboot-workflow (netboot) -> Hardware: $VM1_NAME (MAC: $VM1_MAC) -> Template: $TEMPLATE_NAME"
 	echo "${VM2_NAME}-isoboot-workflow (isoboot/cdboot) -> Hardware: $VM2_NAME (MAC: $VM2_MAC) -> Template: $TEMPLATE_NAME"
+	echo "${VM3_NAME}-customboot-workflow (customboot) -> Hardware: $VM3_NAME (MAC: $VM3_MAC) -> Template: $TEMPLATE_NAME"
 	echo "Status: Disabled (workflows will not run until enabled)"
 }
 
@@ -947,18 +986,25 @@ main()
 	echo -e "\nLAB setup complete!"
 
 	echo -e "\nDebug Redfish BMC (Sushy Tools):"
-	echo -e "\tcurl -k -u admin:$(echo $REDFISH_PASS_BASE64 | base64 -d) https://$REDFISH_IP:$REDFISH_PORT/redfish/v1/Systems/"
+	echo -e "\tcurl -k -u admin:$(echo "$REDFISH_PASS_BASE64" | base64 -d) https://$REDFISH_IP:$REDFISH_PORT/redfish/v1/Systems/"
 
 	echo -e "\nMonitor workflows:"
 	echo -e "\tkubectl -n $NAMESPACE get workflows"
 
 	echo -e "\nTo enable and start provisioning:"
-	echo -e "\tkubectl -n $NAMESPACE patch workflow ${VM1_NAME}-customboot-workflow --type='merge' -p '{\"spec\":{\"disabled\":false}}'"
+	echo -e "\tkubectl -n $NAMESPACE patch workflow ${VM1_NAME}-netboot-workflow --type='merge' -p '{\"spec\":{\"disabled\":false}}'"
 	echo -e "\tkubectl -n $NAMESPACE patch workflow ${VM2_NAME}-isoboot-workflow --type='merge' -p '{\"spec\":{\"disabled\":false}}'"
+	echo -e "\tkubectl -n $NAMESPACE patch workflow ${VM3_NAME}-customboot-workflow --type='merge' -p '{\"spec\":{\"disabled\":false}}'"
 
 	echo -e "\nTo connect to VMs (Use Ctrl+] to disconnect from console):"
 	echo -e "\tvirt-viewer $VM1_NAME or virsh console $VM1_NAME"
 	echo -e "\tvirt-viewer $VM2_NAME"
+	echo -e "\tvirt-viewer $VM3_NAME"
+
+	echo -e "\nTo fix boot order to disk (if needed):"
+	echo -e "\tcurl -k -L -u admin:\$(cat ~/.redfish_password) -X PATCH -H 'Content-Type: application/json' -d '{\"Boot\":{\"BootSourceOverrideEnabled\":\"Continuous\",\"BootSourceOverrideTarget\":\"Hdd\"}}' https://$REDFISH_IP:$REDFISH_PORT/redfish/v1/Systems/$VM1_NAME"
+	echo -e "\tcurl -k -L -u admin:\$(cat ~/.redfish_password) -X PATCH -H 'Content-Type: application/json' -d '{\"Boot\":{\"BootSourceOverrideEnabled\":\"Continuous\",\"BootSourceOverrideTarget\":\"Hdd\"}}' https://$REDFISH_IP:$REDFISH_PORT/redfish/v1/Systems/$VM2_NAME"
+	echo -e "\tcurl -k -L -u admin:\$(cat ~/.redfish_password) -X PATCH -H 'Content-Type: application/json' -d '{\"Boot\":{\"BootSourceOverrideEnabled\":\"Continuous\",\"BootSourceOverrideTarget\":\"Hdd\"}}' https://$REDFISH_IP:$REDFISH_PORT/redfish/v1/Systems/$VM3_NAME"
 }
 
 # Execute main function with all arguments
