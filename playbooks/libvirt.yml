@@ -72,6 +72,13 @@
         daemon_reload: yes
       when: ansible_service_mgr == 'systemd'
 
+    - name: Restart libvirt-reboot-monitor
+      systemd:
+        name: libvirt-reboot-monitor
+        state: restarted
+        daemon_reload: yes
+      when: ansible_service_mgr == 'systemd'
+
   tasks:
     - name: Clean up system packages and snap
       block:
@@ -737,11 +744,19 @@
                   # Extract domain name using sed
                   domain=$(echo "$line" | sed -n "s/.*for domain '\([^']*\)'.*/\1/p")
                   if [ -n "$domain" ]; then
-                      echo "$(date): Reboot event for domain: $domain - resetting boot order"
-                      systemd-run --no-block --unit="libvirt-boot-reset-${domain}-$(date +%s)" \
-                          /usr/local/bin/reset-boot-to-disk.sh "$domain" &>/dev/null || true
+                      echo "$(date): Reboot event for domain: $domain - forcing cold reboot for boot order reset"
+                      # Run in background: wait for guest reboot, then destroy+start
+                      # The qemu hook will reset boot order on "stopped" event
+                      (
+                          sleep 5  # Wait for guest to complete reboot initiation
+                          virsh destroy "$domain" &>/dev/null || true
+                          sleep 5  # Wait for qemu hook to reset boot order
+                          virsh start "$domain" &>/dev/null || true
+                          echo "$(date): Domain $domain cold rebooted with disk-first boot order"
+                      ) &
                   fi
               done
+          notify: Restart libvirt-reboot-monitor
 
         - name: Create systemd service for reboot event monitor
           copy:
@@ -761,6 +776,7 @@
 
               [Install]
               WantedBy=multi-user.target
+          notify: Restart libvirt-reboot-monitor
 
         - name: Reload systemd daemon for reboot monitor
           systemd:
@@ -783,9 +799,26 @@
 
     - name: Install and configure Sushy Tools Redfish Emulator
       block:
-        - name: Generate random password for Redfish authentication
-          ansible.builtin.set_fact:
+        - name: Check if Redfish password file exists
+          stat:
+            path: /root/.redfish_password
+          register: redfish_password_file
+
+        - name: Read existing Redfish password
+          slurp:
+            src: /root/.redfish_password
+          register: existing_redfish_password
+          when: redfish_password_file.stat.exists
+
+        - name: Use existing Redfish password
+          set_fact:
+            redfish_password: "{{ existing_redfish_password.content | b64decode | trim }}"
+          when: redfish_password_file.stat.exists
+
+        - name: Generate new random password for Redfish authentication
+          set_fact:
             redfish_password: "{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_letters', 'digits'], length=16) }}"
+          when: not redfish_password_file.stat.exists
 
         - name: Create Sushy Tools directory structure
           file:
@@ -838,7 +871,8 @@
         - name: Create htpasswd file for Redfish authentication
           command:
             cmd: htpasswd -cbB /etc/sushy/htpasswd admin {{ redfish_password }}
-            creates: /etc/sushy/htpasswd
+          changed_when: true
+          notify: Restart sushy-emulator
 
         - name: Set proper permissions on auth file
           file:
