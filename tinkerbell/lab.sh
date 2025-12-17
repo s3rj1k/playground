@@ -587,11 +587,11 @@ create_vms()
 	create_redfish_machine "$VM2_NAME"
 	create_hardware "worker" "$VM2_NAME" "$VM2_MAC" 2
 
-	# VM3 - netboot mode
+	# VM3 - netboot mode (customboot for HCP)
 	create_vm "$VM3_NAME" "$VM3_MAC"
 	create_redfish_secret "$VM3_NAME"
 	create_redfish_machine "$VM3_NAME"
-	create_hardware "worker" "$VM3_NAME" "$VM3_MAC" 3
+	create_hardware "hcp-worker" "$VM3_NAME" "$VM3_MAC" 3
 
 	echo -e "\nVMs and BMC resources created successfully:"
 	echo "VM1: $VM1_NAME ($VM1_MAC) - netboot mode with Redfish BMC"

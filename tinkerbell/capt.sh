@@ -6,7 +6,7 @@
 set -euo pipefail
 
 echo -e "\n* Setting up environment variables..."
-export CAPT_VERSION=v0.6.7
+export CAPT_VERSION=v0.6.8
 export KUBE_VERSION=v1.34.2
 export KUBEVIP_VERSION=v1.0.2
 
