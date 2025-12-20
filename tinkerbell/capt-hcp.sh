@@ -3,9 +3,6 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: MIT
 
-# CAPT-HCP: Tinkerbell with Hosted Control Plane
-# Variant of capt.sh using cluster-api-provider-hosted-control-plane
-
 set -euo pipefail
 
 echo -e "\n* Setting up environment variables..."
@@ -42,12 +39,31 @@ kubectl wait --for=condition=Available deployment/envoy-gateway -n envoy-gateway
 
 echo -e "\n* Creating Gateway for HCP..."
 cat <<EOF | kubectl apply -f -
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: ${CLUSTER_NAME}-proxy-config
+  namespace: ${NAMESPACE}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: LoadBalancer
+        annotations:
+          kube-vip.io/loadbalancerIPs: "${GATEWAY_LB_IP}"
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: envoy
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: ${CLUSTER_NAME}-proxy-config
+    namespace: ${NAMESPACE}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -150,7 +166,7 @@ spec:
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: TinkerbellMachineTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers
+  name: ${CLUSTER_NAME}-worker
   namespace: ${NAMESPACE}
 spec:
   template:
@@ -225,9 +241,14 @@ spec:
                     system_info:
                       default_user:
                         name: tink
-                        groups: [wheel, adm]
+                        plain_text_passwd: tink
+                        lock_passwd: false
+                        groups: [wheel, adm, sudo]
                         sudo: ["ALL=(ALL) NOPASSWD:ALL"]
                         shell: /bin/bash
+                        ssh_authorized_keys:
+                          - ${SSH_AUTH_KEY}
+                    ssh_pwauth: false
                     manage_etc_hosts: localhost
                     warnings:
                       dsid_missing_source: off
@@ -260,7 +281,7 @@ spec:
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
 kind: KubeadmConfigTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers
+  name: ${CLUSTER_NAME}-worker
   namespace: ${NAMESPACE}
 spec:
   template:
@@ -269,11 +290,6 @@ spec:
         nodeRegistration:
           kubeletExtraArgs:
             provider-id: "tinkerbell://{{ ds.meta_data.instance_id }}"
-      users:
-        - name: tink
-          sudo: ALL=(ALL) NOPASSWD:ALL
-          sshAuthorizedKeys:
-            - ${SSH_AUTH_KEY}
       preKubeadmCommands:
         - systemctl enable --now containerd
         - sleep 10
@@ -281,7 +297,7 @@ spec:
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineDeployment
 metadata:
-  name: ${CLUSTER_NAME}-workers
+  name: ${CLUSTER_NAME}-worker
   namespace: ${NAMESPACE}
   labels:
     cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
@@ -305,11 +321,11 @@ spec:
         configRef:
           apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
           kind: KubeadmConfigTemplate
-          name: ${CLUSTER_NAME}-workers
+          name: ${CLUSTER_NAME}-worker
       infrastructureRef:
         apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
         kind: TinkerbellMachineTemplate
-        name: ${CLUSTER_NAME}-workers
+        name: ${CLUSTER_NAME}-worker
 EOF
 
 echo -e "\n* Applying cluster configuration..."
@@ -317,21 +333,12 @@ until kubectl apply -f ./$CLUSTER_NAME.yaml --wait; do
     sleep 5
 done
 
-echo -e "\n* Assigning LoadBalancer IPs to Gateway and HCP services..."
-# Wait for Gateway Envoy service to be created
-until kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=capi -o name 2>/dev/null | grep -q service; do
-    echo "Waiting for Gateway Envoy service..."
-    sleep 5
-done
-GATEWAY_SVC=$(kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=capi -o jsonpath='{.items[0].metadata.name}')
-kubectl patch svc "$GATEWAY_SVC" -n envoy-gateway-system -p "{\"spec\":{\"loadBalancerIP\":\"${GATEWAY_LB_IP}\"}}"
-
-# Wait for HCP service to be created
+echo -e "\n* Annotating HCP service for kube-vip IP assignment..."
 until kubectl get svc "s-${CLUSTER_NAME}" -n $NAMESPACE &>/dev/null; do
     echo "Waiting for HCP service..."
     sleep 5
 done
-kubectl patch svc "s-${CLUSTER_NAME}" -n $NAMESPACE -p "{\"spec\":{\"loadBalancerIP\":\"${HCP_LB_IP}\"}}"
+kubectl annotate svc "s-${CLUSTER_NAME}" -n $NAMESPACE "kube-vip.io/loadbalancerIPs=${HCP_LB_IP}" --overwrite
 
 echo -e "\n* Waiting for HostedControlPlane to be ready..."
 until kubectl get hostedcontrolplane -n $NAMESPACE $CLUSTER_NAME -o jsonpath='{.status.ready}' 2>/dev/null | grep -q "true"; do
@@ -362,19 +369,32 @@ until kubectl get node 2> /dev/null; do
     sleep 5
 done
 
-echo -e "\n* Removing uninitialized taint from nodes..."
-kubectl taint nodes --all node.cluster.x-k8s.io/uninitialized:NoSchedule- 2>/dev/null || true
-
 echo -e "\n* Installing Cilium CNI..."
-# Cilium works well with HCP - handles its own IPAM and doesn't need external kubeconfig
 CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
-CLI_ARCH=amd64
-if [ "$(uname -m)" = "aarch64" ]; then CLI_ARCH=arm64; fi
-curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
-sha256sum --check cilium-linux-${CLI_ARCH}.tar.gz.sha256sum
-tar xzvfC cilium-linux-${CLI_ARCH}.tar.gz /usr/local/bin
-rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
-cilium install --set ipam.mode=kubernetes --set k8sServiceHost=${CLUSTER_NAME}.${NAMESPACE}.${GATEWAY_LB_IP}.nip.io --set k8sServicePort=443
+curl -L --fail --remote-name-all "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-amd64.tar.gz{,.sha256sum}"
+sha256sum --check cilium-linux-amd64.tar.gz.sha256sum
+tar xzvfC cilium-linux-amd64.tar.gz /usr/local/bin
+rm cilium-linux-amd64.tar.gz{,.sha256sum}
+cilium install \
+    --set ipam.mode=kubernetes \
+    --set k8sServiceHost=${CLUSTER_NAME}.${NAMESPACE}.${GATEWAY_LB_IP}.nip.io \
+    --set k8sServicePort=443 \
+    --set tolerations[0].key=node.cluster.x-k8s.io/uninitialized \
+    --set tolerations[0].operator=Exists \
+    --set tolerations[0].effect=NoSchedule \
+    --set tolerations[1].key=node.kubernetes.io/not-ready \
+    --set tolerations[1].operator=Exists \
+    --set tolerations[1].effect=NoSchedule \
+    --set operator.tolerations[0].key=node.cluster.x-k8s.io/uninitialized \
+    --set operator.tolerations[0].operator=Exists \
+    --set operator.tolerations[0].effect=NoSchedule \
+    --set operator.tolerations[1].key=node.kubernetes.io/not-ready \
+    --set operator.tolerations[1].operator=Exists \
+    --set operator.tolerations[1].effect=NoSchedule
+
+echo -e "\n* Removing node taints..."
+kubectl taint nodes --all node.cluster.x-k8s.io/uninitialized:NoSchedule- 2>/dev/null || true
+kubectl taint nodes --all node.kubernetes.io/not-ready:NoSchedule- 2>/dev/null || true
 
 echo -e "\n* Waiting for nodes to join..."
 until kubectl get nodes 2>/dev/null | grep -q .; do

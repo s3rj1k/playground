@@ -191,8 +191,11 @@ cleanup_all()
 
 	echo -e "\nCleaning up VMs ..."
 	for vm in $(virsh list --all --name | grep -E "^(vm|node)"); do
+		echo "Shutting down VM: $vm"
+		virsh shutdown "$vm" 2>/dev/null || true
+
 		echo "Force destroying VM: $vm"
-		virsh destroy "$vm" || true
+		virsh destroy "$vm" 2>/dev/null || true
 
 		echo "Undefining VM: $vm with complete cleanup"
 		virsh undefine "$vm" --remove-all-storage --nvram --snapshots-metadata --managed-save || true
@@ -570,28 +573,47 @@ create_vm()
 	echo "VM $node_name created"
 }
 
+# Create single VM with all resources
+create_vm_with_resources()
+{
+	local vm_name=$1
+	local vm_mac=$2
+	local role=$3
+	local ip_offset=$4
+
+	echo -e "\n--- Setting up $vm_name (role: $role) ---"
+
+	create_vm "$vm_name" "$vm_mac"
+	create_redfish_secret "$vm_name"
+	create_redfish_machine "$vm_name"
+	create_hardware "$role" "$vm_name" "$vm_mac" "$ip_offset"
+
+	# Verify resources were created
+	echo -e "\nVerifying $vm_name resources..."
+	if ! kubectl get hardware "$vm_name" -n $NAMESPACE &>/dev/null; then
+		echo "Error: Hardware $vm_name was not created"
+		exit 1
+	fi
+	if ! kubectl get machines.bmc.tinkerbell.org "$vm_name" -n $NAMESPACE &>/dev/null; then
+		echo "Error: BMC Machine $vm_name was not created"
+		exit 1
+	fi
+	echo "✓ $vm_name resources verified"
+}
+
 # Create VMs and BMC resources for Tinkerbell
 create_vms()
 {
 	echo -e "\nCreating VMs and BMC resources for Tinkerbell provisioning ..."
 
 	# VM1 - netboot mode
-	create_vm "$VM1_NAME" "$VM1_MAC"
-	create_redfish_secret "$VM1_NAME"
-	create_redfish_machine "$VM1_NAME"
-	create_hardware "control-plane" "$VM1_NAME" "$VM1_MAC" 1
+	create_vm_with_resources "$VM1_NAME" "$VM1_MAC" "control-plane" 1
 
 	# VM2 - CD boot mode
-	create_vm "$VM2_NAME" "$VM2_MAC"
-	create_redfish_secret "$VM2_NAME"
-	create_redfish_machine "$VM2_NAME"
-	create_hardware "worker" "$VM2_NAME" "$VM2_MAC" 2
+	create_vm_with_resources "$VM2_NAME" "$VM2_MAC" "worker" 2
 
 	# VM3 - netboot mode (customboot for HCP)
-	create_vm "$VM3_NAME" "$VM3_MAC"
-	create_redfish_secret "$VM3_NAME"
-	create_redfish_machine "$VM3_NAME"
-	create_hardware "hcp-worker" "$VM3_NAME" "$VM3_MAC" 3
+	create_vm_with_resources "$VM3_NAME" "$VM3_MAC" "hcp-worker" 3
 
 	echo -e "\nVMs and BMC resources created successfully:"
 	echo "VM1: $VM1_NAME ($VM1_MAC) - netboot mode with Redfish BMC"
