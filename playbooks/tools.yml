@@ -1,0 +1,297 @@
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/tools.yml
+
+---
+- name: Kubernetes related tools on AMD64
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  ignore_errors: false
+
+  pre_tasks:
+    - name: Check if system is supported
+      block:
+        - name: Check if distribution is Debian or Ubuntu
+          fail:
+            msg: "This playbook only supports Debian or Ubuntu distributions"
+          when: ansible_distribution not in ["Debian", "Ubuntu"]
+
+        - name: Check if architecture is AMD64
+          fail:
+            msg: "This playbook only supports AMD64 architecture"
+          when: ansible_architecture != "x86_64"
+
+        - name: Get OS version
+          debug:
+            msg: "Running on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+
+    - name: Wait for system to be ready
+      wait_for:
+        path: /var/lib/cloud/instance/boot-finished
+        timeout: 600
+      when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
+
+  tasks:
+    - name: Install kubectl
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/kubernetes/kubernetes/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/kubernetes/kubernetes/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download kubectl binary ({{ version }})
+          get_url:
+            url: "https://dl.k8s.io/release/{{ version }}/bin/linux/amd64/kubectl"
+            dest: /usr/local/bin/kubectl
+            mode: "0755"
+          when: version | trim | length > 0
+
+    - name: Install Krew
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/kubernetes-sigs/krew/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/kubernetes-sigs/krew/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download archive
+          get_url:
+            url: "https://github.com/kubernetes-sigs/krew/releases/download/{{ version }}/krew-linux_amd64.tar.gz"
+            dest: /tmp/krew.tar.gz
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Extract binary
+          unarchive:
+            src: /tmp/krew.tar.gz
+            dest: /tmp
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Install Krew binary ({{ version }})
+          shell: |
+            /tmp/krew-linux_amd64 install krew
+          environment:
+            KREW_ROOT: /opt/krew
+          args:
+            creates: /opt/krew/bin/kubectl-krew
+          when: version | trim | length > 0
+
+        - name: Set environment variables
+          copy:
+            dest: /etc/profile.d/krew.sh
+            content: |
+              export KREW_ROOT=/opt/krew
+              export PATH="${KREW_ROOT}/bin:$PATH"
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Create directories
+          file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+            owner: root
+            group: root
+          loop:
+            - /opt/krew
+            - /opt/krew/bin
+            - /opt/krew/receipts
+          when: version | trim | length > 0
+
+        - name: Remove temporary files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/krew.tar.gz
+            - /tmp/krew-linux_amd64
+
+    - name: Install Helm
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/helm/helm/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/helm/helm/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download archive
+          get_url:
+            url: "https://get.helm.sh/helm-{{ version }}-linux-amd64.tar.gz"
+            dest: /tmp/helm.tar.gz
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Extract binary
+          unarchive:
+            src: /tmp/helm.tar.gz
+            dest: /tmp
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Install Helm binary ({{ version }})
+          copy:
+            src: /tmp/linux-amd64/helm
+            dest: /usr/local/bin/helm
+            mode: "0755"
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Remove temporary files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/helm.tar.gz
+            - /tmp/linux-amd64
+
+    - name: Install clusterctl
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download and Install clusterctl binary ({{ version }})
+          get_url:
+            url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ version }}/clusterctl-linux-amd64"
+            dest: /usr/local/bin/clusterctl
+            mode: "0755"
+          when: version | trim | length > 0
+
+    - name: Install ORAS
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/oras-project/oras/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/oras-project/oras/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download binary
+          get_url:
+            url: "https://github.com/oras-project/oras/releases/download/{{ version }}/oras_{{ version | replace('v', '') }}_linux_amd64.tar.gz"
+            dest: /tmp/oras.tar.gz
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Create temporary extraction directory
+          file:
+            path: /tmp/oras-extract
+            state: directory
+            mode: "0755"
+          when: version | trim | length > 0
+
+        - name: Extract binary
+          unarchive:
+            src: /tmp/oras.tar.gz
+            dest: /tmp/oras-extract
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Install ORAS binary ({{ version }})
+          copy:
+            src: /tmp/oras-extract/oras
+            dest: /usr/local/bin/oras
+            mode: "0755"
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Cleanup temporary files
+          file:
+            path: "{{ item }}"
+            state: absent
+          with_items:
+            - /tmp/oras.tar.gz
+            - /tmp/oras-extract
+
+    - name: Install yq
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/mikefarah/yq/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/mikefarah/yq/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download and Install yq binary ({{ version }})
+          get_url:
+            url: "https://github.com/mikefarah/yq/releases/download/{{ version }}/yq_linux_amd64"
+            dest: /usr/local/bin/yq
+            mode: "0755"
+          when: version | trim | length > 0
+
+    - name: Install envsubst
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/a8m/envsubst/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/a8m/envsubst/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download binary
+          get_url:
+            url: https://github.com/a8m/envsubst/releases/download/{{ version }}/envsubst-Linux-x86_64
+            dest: /tmp/envsubst
+            mode: "0755"
+          when: version | trim | length > 0
+
+        - name: Install envsubst binary ({{ version }})
+          copy:
+            src: /tmp/envsubst
+            dest: /usr/local/bin/envsubst
+            mode: "0755"
+            remote_src: yes
+            owner: root
+            group: root
+          when: version | trim | length > 0
+
+        - name: Clean up temporary files
+          file:
+            path: /tmp/envsubst
+            state: absent
