@@ -29,6 +29,8 @@ parameters:
           - ubuntu-24.04-minimal-cloudimg-amd64
           - ubuntu-22.04-minimal-cloudimg-amd64
           - debian-13-generic-amd64
+          - opensuse-microos-amd64
+          - opensuse-microos-cre-amd64
         description: "Must be a known Image ID"
 
   ssh_pub_key:
@@ -223,7 +225,28 @@ resources:
 
             runcmd:
               - |
-                apt-get update && apt-get -y upgrade && \
+                # Detect OS type
+                if [ -f /etc/os-release ]; then
+                  . /etc/os-release
+                  OS_ID="${ID}"
+                else
+                  OS_ID="unknown"
+                fi
+
+                # Perform OS-specific updates
+                case "${OS_ID}" in
+                  ubuntu|debian)
+                    apt-get update && apt-get -y upgrade
+                    ;;
+                  opensuse-microos|opensuse-tumbleweed|opensuse-leap|opensuse)
+                    transactional-update -n dup || zypper -n update
+                    ;;
+                  *)
+                    echo "Unknown OS: ${OS_ID}, skipping package updates"
+                    ;;
+                esac
+
+                # Configure SSH
                 sed -i \
                   -e '/^[[:space:]]*#*[[:space:]]*Include/d' \
                   -e '/^[[:space:]]*#*[[:space:]]*PermitRootLogin/d' \
@@ -232,8 +255,10 @@ resources:
                   -e '$a\PermitRootLogin prohibit-password' \
                   -e '$a\PasswordAuthentication no' \
                   -e '$a\PermitEmptyPasswords no' \
-                  /etc/ssh/sshd_config && \
-                systemctl restart sshd
+                  /etc/ssh/sshd_config
+
+                # Restart SSH service
+                systemctl restart sshd || systemctl restart ssh
 
                 RESULT=$?
 
