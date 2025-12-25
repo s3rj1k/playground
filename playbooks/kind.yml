@@ -1,0 +1,413 @@
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/kind.yml
+
+---
+- name: Kind on AMD64
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  ignore_errors: false
+  vars:
+    registry_mirror: ""
+
+  pre_tasks:
+    - name: Check if system is supported
+      block:
+        - name: Check if distribution is Debian or Ubuntu
+          fail:
+            msg: "This playbook only supports Debian or Ubuntu distributions"
+          when: ansible_distribution not in ["Debian", "Ubuntu"]
+
+        - name: Check if architecture is AMD64
+          fail:
+            msg: "This playbook only supports AMD64 architecture"
+          when: ansible_architecture != "x86_64"
+
+        - name: Get OS version
+          debug:
+            msg: "Running on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+
+    - name: Wait for system to be ready
+      wait_for:
+        path: /var/lib/cloud/instance/boot-finished
+        timeout: 600
+      when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
+
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+        daemon_reload: yes
+      when: ansible_service_mgr == 'systemd'
+
+  tasks:
+    - name: Update and upgrade system packages
+      apt:
+        update_cache: yes
+        upgrade: yes
+      register: system_upgraded
+
+    - name: Consolidated package management
+      block:
+        - name: Create directory for apt keyrings
+          ansible.builtin.file:
+            path: /etc/apt/keyrings
+            state: directory
+            mode: "0755"
+
+        # Note: `ansible.builtin.deb822_repository` requires Ansible 2.15+
+
+        - name: Download Docker signing key
+          ansible.builtin.get_url:
+            url: "https://download.docker.com/linux/ubuntu/gpg"
+            dest: "/etc/apt/keyrings/docker.asc"
+            mode: "0644"
+
+        - name: Create Docker repository file
+          ansible.builtin.copy:
+            dest: "/etc/apt/sources.list.d/docker.sources"
+            content: |
+              X-Repolib-Name: docker
+              Types: deb
+              URIs: https://download.docker.com/linux/{{ ansible_distribution | lower }}
+              Signed-By: /etc/apt/keyrings/docker.asc
+              Suites: {{ ansible_distribution_release | lower }}
+              Architectures: amd64
+              Components: stable
+              Enabled: yes
+            mode: "0644"
+
+        - name: Install all required packages
+          apt:
+            name:
+              # Base dependencies
+              - apt-transport-https
+              - ca-certificates
+              - curl
+              - gnupg
+              # Networking
+              - ebtables
+              - ethtool
+              - iproute2
+              - socat
+              # Docker and dependencies
+              - containerd.io
+              - docker-buildx-plugin
+              - docker-ce
+              - docker-ce-cli
+              - docker-compose-plugin
+            state: present
+            update_cache: yes
+          when: system_upgraded is success
+
+    - name: Install Kind
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/kubernetes-sigs/kind/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/kubernetes-sigs/kind/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download Kind binary ({{ version }})
+          get_url:
+            url: "https://kind.sigs.k8s.io/dl/{{ version }}/kind-linux-amd64"
+            dest: /usr/local/bin/kind
+            mode: "0755"
+          when: version | trim | length > 0
+
+    - name: Configure kernel modules
+      block:
+        - name: Ensure required kernel modules are loaded
+          modprobe:
+            name: "{{ item }}"
+            state: present
+          loop:
+            - overlay
+            - br_netfilter
+
+        - name: Persist required kernel modules
+          copy:
+            dest: /etc/modules-load.d/99-local.conf
+            content: |
+              overlay
+              br_netfilter
+            mode: "0644"
+
+        - name: Configure kernel parameters
+          copy:
+            dest: /etc/sysctl.d/99-local.conf
+            content: |
+              fs.inotify.max_user_instances = 8192
+              fs.inotify.max_user_watches = 524288
+              kernel.panic = 10
+              kernel.panic_on_oops = 1
+              net.bridge.bridge-nf-call-ip6tables = 1
+              net.bridge.bridge-nf-call-iptables = 1
+              net.ipv4.conf.all.rp_filter = 1
+              net.ipv4.ip_forward = 1
+              net.ipv4.tcp_congestion_control = bbr
+              net.ipv6.conf.all.disable_ipv6 = 0
+              net.ipv6.conf.all.forwarding = 1
+              vm.overcommit_memory = 1
+            mode: "0644"
+
+        - name: Apply kernel parameters
+          command: sysctl --system
+          changed_when: false
+
+    - name: Configure Docker
+      block:
+        - name: Create Docker daemon configuration directory
+          file:
+            path: /etc/docker
+            state: directory
+            mode: "0755"
+
+        - name: Ensure directory for systemd-resolved config exists
+          file:
+            path: /etc/systemd/resolved.conf.d/
+            state: directory
+            mode: "0755"
+
+        - name: Set Docker daemon configuration
+          copy:
+            dest: /etc/docker/daemon.json
+            mode: "0644"
+            content: |
+              {
+                "default-address-pools": [
+                  {
+                    "base": "172.17.0.0/16",
+                    "size": 24
+                  }
+                ],
+                "dns": [
+                  "172.17.0.1"
+                ],
+                "builder": {
+                  "gc": {
+                    "enabled": true,
+                    "defaultKeepStorage": "10GB",
+                    "policy": [
+                      {
+                        "keepStorage": "10GB",
+                        "filter": [
+                          "unused-for=42h"
+                        ]
+                      },
+                      {
+                        "keepStorage": "50GB",
+                        "all": true
+                      }
+                    ]
+                  }
+                }
+              }
+          when: registry_mirror is not defined or registry_mirror | trim | length == 0
+          notify: Restart Docker
+
+        - name: Set Docker daemon configuration
+          copy:
+            dest: /etc/docker/daemon.json
+            mode: "0644"
+            content: |
+              {
+                "default-address-pools": [
+                  {
+                    "base": "172.17.0.0/16",
+                    "size": 24
+                  }
+                ],
+                "dns": [
+                  "172.17.0.1"
+                ],
+                "builder": {
+                  "gc": {
+                    "enabled": true,
+                    "defaultKeepStorage": "10GB",
+                    "policy": [
+                      {
+                        "keepStorage": "10GB",
+                        "filter": [
+                          "unused-for=42h"
+                        ]
+                      },
+                      {
+                        "keepStorage": "50GB",
+                        "all": true
+                      }
+                    ]
+                  }
+                },
+                "registry-mirrors": [
+                  "https://{{ registry_mirror | regex_replace('^https?://', '') }}"
+                ]
+              }
+          when: registry_mirror is defined and registry_mirror | trim | length > 0
+          notify: Restart Docker
+
+        - name: Enable Docker service
+          service:
+            name: docker
+            enabled: yes
+            state: started
+
+        - name: Configure systemd-resolved global settings
+          copy:
+            dest: /etc/systemd/resolved.conf.d/global.conf
+            content: |
+              [Resolve]
+              DNSStubListenerExtra=172.17.0.1
+
+              MulticastDNS=no
+              LLMNR=no
+
+              ReadEtcHosts=yes
+            mode: "0644"
+          notify: Restart systemd-resolved
+
+        - name: Enable systemd-resolved service
+          service:
+            name: systemd-resolved
+            enabled: yes
+            state: started
+
+    - name: Configure Kind
+      block:
+        - name: Create Kind directory
+          file:
+            path: /root/.kind
+            state: directory
+            mode: "0755"
+
+        - name: Create default_hosts.toml for registry configuration
+          copy:
+            dest: /root/.kind/default_hosts.toml
+            mode: "0644"
+            content: |
+              [host."https://{{ registry_mirror | regex_replace('^https?://', '') }}"]
+                capabilities = ["pull", "resolve"]
+                # skip_verify = true
+
+        - name: Create Kind cluster configuration file
+          copy:
+            dest: /root/.kind/config.yaml
+            content: |
+              kind: Cluster
+              apiVersion: kind.x-k8s.io/v1alpha4
+              networking:
+                disableDefaultCNI: true
+              nodes:
+                - role: control-plane
+                  extraMounts:
+                    - hostPath: /root/.kind/default_hosts.toml
+                      containerPath: /etc/containerd/certs.d/_default/hosts.toml
+                      readOnly: true
+                    - hostPath: /var/run/docker.sock
+                      containerPath: /var/run/docker.sock
+                      readOnly: false
+                - role: worker
+                  extraMounts:
+                    - hostPath: /root/.kind/default_hosts.toml
+                      containerPath: /etc/containerd/certs.d/_default/hosts.toml
+                      readOnly: true
+                    - hostPath: /var/run/docker.sock
+                      containerPath: /var/run/docker.sock
+                      readOnly: false
+              containerdConfigPatches:
+                - |-
+                  [plugins.'io.containerd.cri.v1.images'.registry]
+                    config_path = '/etc/containerd/certs.d'
+            mode: "0644"
+
+        - name: Create Kind helper script
+          copy:
+            dest: /root/.kind/create-cluster.sh
+            content: |
+              #!/bin/bash
+
+              echo "Fetching latest versions of charts ..."
+              CALICO_VERSION=$(curl -s "https://api.github.com/repos/projectcalico/calico/releases/latest" | jq -r ".tag_name")
+              METALLB_VERSION=$(curl -s "https://api.github.com/repos/metallb/metallb/releases/latest" | jq -r ".tag_name")
+
+              echo "Using Calico version: ${CALICO_VERSION}"
+              echo "Using MetalLB version: ${METALLB_VERSION}"
+
+              echo "Creating Kind cluster"
+              kind create cluster --verbosity 1 --retain --config /root/.kind/config.yaml
+
+              echo "Installing Calico ${CALICO_VERSION}..."
+              until kubectl create -f "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml" &> /dev/null; do
+                echo "Retrying Calico installation in 5 seconds..."
+                sleep 5
+              done
+
+              echo "Installing MetalLB ${METALLB_VERSION}..."
+              until kubectl apply -f "https://raw.githubusercontent.com/metallb/metallb/${METALLB_VERSION}/config/manifests/metallb-native.yaml" &> /dev/null; do
+                echo "Retrying MetalLB installation in 5 seconds..."
+                sleep 5
+              done
+
+              echo "Waiting for MetalLB controller to be ready..."
+              kubectl wait pods -n metallb-system -l app=metallb,component=controller --for=condition=Ready --timeout=10m
+              echo "Waiting for MetalLB speaker to be ready..."
+              kubectl wait pods -n metallb-system -l app=metallb,component=speaker --for=condition=Ready --timeout=2m
+
+              echo "Configuring MetalLB IP pool..."
+              {% raw %}
+              until GW_IP=$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' kind); do
+              {% endraw %}
+                echo "Waiting for Docker network information..."
+                sleep 5
+              done
+
+              NET_IP=$(echo ${GW_IP} | sed -E 's|^([0-9]+\.[0-9]+)\..*$|\1|g')
+
+              until cat <<EOF | sed -E "s|172.19|${NET_IP}|g" | kubectl apply -f -
+              apiVersion: metallb.io/v1beta1
+              kind: IPAddressPool
+              metadata:
+                name: ip-pool
+                namespace: metallb-system
+              spec:
+                addresses:
+                  - 172.19.255.200-172.19.255.250
+              ---
+              apiVersion: metallb.io/v1beta1
+              kind: L2Advertisement
+              metadata:
+                name: l2adv
+                namespace: metallb-system
+              EOF
+              do
+                echo "Retrying MetalLB configuration in 5 seconds..."
+                sleep 5
+              done
+
+              kubectl cluster-info
+              echo "Cluster setup complete!"
+            mode: "0755"
+      when: registry_mirror is defined and registry_mirror | trim | length > 0
+
+    - name: Handle system reboot check
+      block:
+        - name: Check if reboot is required
+          stat:
+            path: /var/run/reboot-required
+          register: reboot_required_file
+
+        - name: Print reboot status
+          debug:
+            msg: "System reboot is required"
+          when: reboot_required_file.stat.exists
+      when: system_upgraded is success
