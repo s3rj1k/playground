@@ -1,0 +1,50 @@
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
+# Entrypoint playbook to configure a complete lab environment
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/lab.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "REGISTRY_MIRROR=https://registry.example.com:5000" playbooks/lab.yml
+
+---
+- name: Set global variables
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    REGISTRY_MIRROR: ""
+  tasks:
+    - name: Set global facts
+      set_fact:
+        REGISTRY_MIRROR: "{{ REGISTRY_MIRROR }}"
+        cacheable: yes
+
+- name: Import base configuration playbook
+  import_playbook: base.yml
+
+- name: Import libvirt configuration playbook
+  import_playbook: libvirt.yml
+
+- name: Import tools installation playbook
+  import_playbook: tools.yml
+
+- name: Import zot registry playbook
+  import_playbook: zot.yml
+
+- name: Import k3s Kubernetes playbook
+  import_playbook: k3s.yml
+
+- name: Final system checks
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check if system reboot is required
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: Display reboot requirement
+      debug:
+        msg: "System reboot is required to complete the lab setup"
+      when: reboot_required_file.stat.exists

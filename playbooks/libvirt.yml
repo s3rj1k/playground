@@ -11,6 +11,14 @@
   gather_facts: true
   ignore_errors: false
 
+  vars:
+    provisioning_network:
+      name: default
+      bridge: virbr0
+      address: 172.17.1.1
+      netmask: 255.255.255.0
+      forward_mode: nat  # nat, route, or none
+
   pre_tasks:
     - name: Check if system is supported
       block:
@@ -87,6 +95,7 @@
               - libvirt-dev
               - pkg-config
               - python3-libvirt
+              - python3-lxml
               - python3-pip
               - python3-venv
               # SSL certificate generation
@@ -202,6 +211,49 @@
         - name: Set default storage pool to autostart
           command: virsh pool-autostart default
           when: default_pool_check.rc != 0
+
+    - name: Configure provisioning libvirt network
+      block:
+        - name: Check if provisioning network exists with correct IP
+          shell: virsh net-dumpxml {{ provisioning_network.name }} 2>/dev/null | grep -q "ip address='{{ provisioning_network.address }}'"
+          register: provisioning_net_correct
+          ignore_errors: true
+          changed_when: false
+
+        - name: Destroy existing network if misconfigured
+          command: virsh net-destroy {{ provisioning_network.name }}
+          when: provisioning_net_correct.rc != 0
+          ignore_errors: true
+
+        - name: Undefine existing network if misconfigured
+          command: virsh net-undefine {{ provisioning_network.name }}
+          when: provisioning_net_correct.rc != 0
+          ignore_errors: true
+
+        - name: Define provisioning network
+          community.libvirt.virt_net:
+            command: define
+            name: "{{ provisioning_network.name }}"
+            xml: |
+              <network>
+                <name>{{ provisioning_network.name }}</name>
+                <forward mode='{{ provisioning_network.forward_mode | default("nat") }}'/>
+                <bridge name='{{ provisioning_network.bridge }}' stp='on' delay='0'/>
+                <ip address='{{ provisioning_network.address }}' netmask='{{ provisioning_network.netmask }}'>
+                </ip>
+              </network>
+          when: provisioning_net_correct.rc != 0
+
+        - name: Start provisioning network
+          community.libvirt.virt_net:
+            command: start
+            name: "{{ provisioning_network.name }}"
+          ignore_errors: true
+
+        - name: Set provisioning network to autostart
+          community.libvirt.virt_net:
+            autostart: yes
+            name: "{{ provisioning_network.name }}"
 
     # Workaround for sushy-tools ignoring BootSourceOverrideEnabled with libvirt driver.
     # Sushy-tools always sets boot device as "continuous" (persistent), ignoring one-time boot requests.
@@ -662,22 +714,59 @@
             state: started
       notify: Restart sushy-emulator
 
+    - name: Create VM helper script
+      copy:
+        dest: /usr/local/bin/create-vm
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          # Copyright 2025 s3rj1k
+          # SPDX-License-Identifier: MIT
+
+          set -euo pipefail
+
+          if [[ $# -ne 2 ]]; then
+              echo "Usage: $0 VM_INDEX BRIDGE_NAME"
+              echo "Example: $0 1 virbr"
+              exit 1
+          fi
+
+          VM_INDEX="$1"
+          BRIDGE_NAME="$2"
+
+          # Validate VM_INDEX is a number
+          if ! [[ "$VM_INDEX" =~ ^[0-9]+$ ]]; then
+              echo "Error: VM_INDEX must be a number"
+              exit 1
+          fi
+
+          # Computed values
+          VM_NAME="vm${VM_INDEX}"
+          DISK_PATH="/var/lib/libvirt/images/${VM_NAME}-disk.img"
+          DISK_SERIAL="vm-disk-$(printf "%03d" "$VM_INDEX")"
+          MAC_ADDRESS="52:54:00:12:34:$(printf "%02x" "$VM_INDEX")"
+
+          # Create VM
+          virt-install \
+              --name "$VM_NAME" \
+              --vcpus "6" \
+              --ram "6144" \
+              --os-variant "debian12" \
+              --connect "qemu:///system" \
+              --disk "path=${DISK_PATH},bus=virtio,size=60,sparse=yes,serial=${DISK_SERIAL}" \
+              --disk "device=cdrom,bus=sata" \
+              --network "bridge:${BRIDGE_NAME},mac=${MAC_ADDRESS}" \
+              --console "pty,target.type=virtio" \
+              --serial "pty" \
+              --graphics "vnc,listen=0.0.0.0" \
+              --import \
+              --noautoconsole \
+              --noreboot \
+              --boot "uefi,firmware.feature0.name=enrolled-keys,firmware.feature0.enabled=no,firmware.feature1.name=secure-boot,firmware.feature1.enabled=yes"
+
     - name: Display Redfish credentials
       debug:
         msg: |
           Redfish API endpoint: https://localhost:8000/redfish/v1/
           Username: admin
           Password: {{ redfish_password }}
-
-    - name: Handle system reboot check
-      block:
-        - name: Check if reboot is required
-          stat:
-            path: /var/run/reboot-required
-          register: reboot_required_file
-
-        - name: Print reboot status
-          debug:
-            msg: "System reboot is required"
-          when: reboot_required_file.stat.exists
-      when: system_upgraded is success

@@ -1,0 +1,198 @@
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k3s.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "K3S_TOKEN=mytoken" playbooks/k3s.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "CLUSTER_CIDR=10.42.0.0/16" playbooks/k3s.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "REGISTRY_MIRROR=https://registry.example.com:5000" playbooks/k3s.yml
+
+---
+- name: Kubernetes (k3s)
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  ignore_errors: false
+  vars:
+    K3S_TOKEN: ""
+    CLUSTER_CIDR: "172.20.0.0/16"
+    SERVICE_CIDR: "172.21.0.0/16"
+    K3S_EXTRA_FLAGS: ""
+    REGISTRY_MIRROR: ""
+
+  pre_tasks:
+    - name: Wait for system to be ready
+      wait_for:
+        path: /var/lib/cloud/instance/boot-finished
+        timeout: 600
+      when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
+
+  tasks:
+    - name: Configure registry mirror
+      block:
+        - name: Create k3s config directory
+          file:
+            path: /etc/rancher/k3s
+            state: directory
+            mode: "0755"
+
+        - name: Configure registry mirrors
+          copy:
+            dest: /etc/rancher/k3s/registries.yaml
+            content: |
+              mirrors:
+                docker.io:
+                  endpoint:
+                    - "{{ REGISTRY_MIRROR }}"
+                registry.k8s.io:
+                  endpoint:
+                    - "{{ REGISTRY_MIRROR }}"
+                gcr.io:
+                  endpoint:
+                    - "{{ REGISTRY_MIRROR }}"
+                ghcr.io:
+                  endpoint:
+                    - "{{ REGISTRY_MIRROR }}"
+                quay.io:
+                  endpoint:
+                    - "{{ REGISTRY_MIRROR }}"
+              configs:
+                "{{ REGISTRY_MIRROR | regex_replace('^https?://(.*)$', '\\1') }}":
+                  tls:
+                    insecure_skip_verify: true
+            mode: "0644"
+      when: REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0
+
+    - name: Prepare Kubernetes component manifests for auto-deploy
+      block:
+        - name: Ensure k3s manifests directory exists
+          file:
+            path: /var/lib/rancher/k3s/server/manifests
+            state: directory
+            mode: "0755"
+
+        - name: Download cert-manager manifest
+          get_url:
+            url: https://github.com/jetstack/cert-manager/releases/latest/download/cert-manager.yaml
+            dest: /var/lib/rancher/k3s/server/manifests/cert-manager.yaml
+            mode: "0644"
+
+        - name: Download Flux CD manifest
+          get_url:
+            url: https://github.com/fluxcd/flux2/releases/latest/download/install.yaml
+            dest: /var/lib/rancher/k3s/server/manifests/flux-cd.yaml
+            mode: "0644"
+
+        - name: Download Cluster API Operator manifest
+          get_url:
+            url: https://github.com/kubernetes-sigs/cluster-api-operator/releases/latest/download/operator-components.yaml
+            dest: /var/lib/rancher/k3s/server/manifests/cluster-api-operator.yaml
+            mode: "0644"
+
+        - name: Create kro HelmChart manifest for k3s auto-deploy
+          copy:
+            dest: /var/lib/rancher/k3s/server/manifests/kro-helmchart.yaml
+            content: |
+              apiVersion: helm.cattle.io/v1
+              kind: HelmChart
+              metadata:
+                name: kro
+                namespace: kube-system
+              spec:
+                chart: oci://registry.k8s.io/kro/charts/kro
+                targetNamespace: kro-system
+                createNamespace: true
+                valuesContent: ""
+            mode: "0644"
+
+        - name: Create k3k HelmChart manifest for k3s auto-deploy
+          copy:
+            dest: /var/lib/rancher/k3s/server/manifests/k3k-helmchart.yaml
+            content: |
+              apiVersion: helm.cattle.io/v1
+              kind: HelmChart
+              metadata:
+                name: k3k
+                namespace: kube-system
+              spec:
+                chart: k3k
+                repo: https://rancher.github.io/k3k
+                targetNamespace: k3k-system
+                createNamespace: true
+                valuesContent: ""
+            mode: "0644"
+
+    - name: Install k3s
+      block:
+        - name: Download k3s installation script
+          get_url:
+            url: https://get.k3s.io
+            dest: /tmp/k3s-install.sh
+            mode: "0755"
+
+        - name: Install k3s server with cluster-init
+          shell: |
+            /tmp/k3s-install.sh server --cluster-init \
+              --cluster-cidr={{ CLUSTER_CIDR }} \
+              --service-cidr={{ SERVICE_CIDR }} \
+              {{ K3S_EXTRA_FLAGS }}
+          args:
+            executable: /bin/bash
+            creates: /usr/local/bin/k3s
+          environment:
+            K3S_TOKEN: "{{ K3S_TOKEN }}"
+          when: K3S_TOKEN is defined and K3S_TOKEN | trim | length > 0
+
+        - name: Install k3s server with cluster-init (no token)
+          shell: |
+            /tmp/k3s-install.sh server --cluster-init \
+              --cluster-cidr={{ CLUSTER_CIDR }} \
+              --service-cidr={{ SERVICE_CIDR }} \
+              {{ K3S_EXTRA_FLAGS }}
+          args:
+            executable: /bin/bash
+            creates: /usr/local/bin/k3s
+          when: K3S_TOKEN is not defined or K3S_TOKEN | trim | length == 0
+
+        - name: Wait for k3s node to be ready
+          shell: k3s kubectl wait --for=condition=Ready node --all --timeout=0s
+          register: k3s_node_ready
+          until: k3s_node_ready.rc == 0
+          retries: 42
+          delay: 30
+          changed_when: false
+
+        - name: Remove installation script
+          file:
+            path: /tmp/k3s-install.sh
+            state: absent
+
+    - name: Configure kubectl access
+      block:
+        - name: Create .kube directory
+          file:
+            path: /root/.kube
+            state: directory
+            mode: "0755"
+
+        - name: Copy k3s kubeconfig to .kube/config
+          copy:
+            src: /etc/rancher/k3s/k3s.yaml
+            dest: /root/.kube/config
+            remote_src: true
+            mode: "0600"
+
+    - name: Install k3k CLI
+      block:
+        - name: Get latest k3k CLI version
+          uri:
+            url: "https://api.github.com/repos/rancher/k3k/releases/latest"
+            return_content: yes
+          register: k3k_release_info
+
+        - name: Download and install k3k CLI
+          get_url:
+            url: "https://github.com/rancher/k3k/releases/download/{{ k3k_release_info.json.tag_name }}/k3kcli-linux-amd64"
+            dest: /usr/local/bin/k3kcli
+            mode: "0755"
+          when: k3k_release_info is defined and k3k_release_info.status == 200

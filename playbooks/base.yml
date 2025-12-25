@@ -189,23 +189,41 @@
             regexp: "^\\s*#*\\s*Include"
             state: absent
 
-        - name: Configure root login restrictions
+        - name: Remove all PermitRootLogin lines
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: "^\\s*#*\\s*PermitRootLogin"
+            state: absent
+
+        - name: Configure root login restrictions
+          lineinfile:
+            path: /etc/ssh/sshd_config
             line: "PermitRootLogin prohibit-password"
+            insertafter: EOF
+
+        - name: Remove all PasswordAuthentication lines
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^\\s*#*\\s*PasswordAuthentication"
+            state: absent
 
         - name: Disable password authentication
           lineinfile:
             path: /etc/ssh/sshd_config
-            regexp: "^\\s*#*\\s*PasswordAuthentication"
             line: "PasswordAuthentication no"
+            insertafter: EOF
+
+        - name: Remove all PermitEmptyPasswords lines
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^\\s*#*\\s*PermitEmptyPasswords"
+            state: absent
 
         - name: Disable empty passwords
           lineinfile:
             path: /etc/ssh/sshd_config
-            regexp: "^\\s*#*\\s*PermitEmptyPasswords"
             line: "PermitEmptyPasswords no"
+            insertafter: EOF
 
         - name: Remove cloud-init SSH configuration
           file:
@@ -358,16 +376,3 @@
         masked: yes
       loop:
         - display-manager.service
-
-    - name: Handle system reboot check
-      block:
-        - name: Check if reboot is required
-          stat:
-            path: /var/run/reboot-required
-          register: reboot_required_file
-
-        - name: Print reboot status
-          debug:
-            msg: "System reboot is required"
-          when: reboot_required_file.stat.exists
-      when: system_upgraded is success

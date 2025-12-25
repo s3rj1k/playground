@@ -456,16 +456,3 @@
                 annotations:
                   storageclass.kubernetes.io/is-default-class: "true"
       when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-    - name: Handle system reboot check
-      block:
-        - name: Check if reboot is required
-          stat:
-            path: /var/run/reboot-required
-          register: reboot_required_file
-
-        - name: Print reboot status
-          debug:
-            msg: "System reboot is required"
-          when: reboot_required_file.stat.exists
-      when: system_upgraded is success

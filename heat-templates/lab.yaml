@@ -3,7 +3,7 @@
 
 heat_template_version: 2021-04-16
 
-description: Template for VM with Libvirt
+description: Template for lab VM
 
 parameters:
   prefix:
@@ -287,9 +287,9 @@ resources:
                 apt-get update && apt-get install -y ansible git || true
 
                 ansible-pull -U "https://github.com/s3rj1k/playground.git" \
-                  playbooks/libvirt.yml \
+                  playbooks/lab.yml \
                   -v \
-                  -e "registry_mirror='%registry_mirror%'"
+                  -e "REGISTRY_MIRROR='%registry_mirror%'"
                 ANSIBLE_RESULT=$?
 
                 if [ $ANSIBLE_RESULT -eq 0 ]; then
