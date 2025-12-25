@@ -4,14 +4,12 @@
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/libvirt.yml
 
 ---
-- name: Libvirt with Redfish and Kind on AMD64
+- name: Libvirt with Sushy Tools (Redfish Emulator)
   hosts: localhost
   connection: local
   become: true
   gather_facts: true
   ignore_errors: false
-  vars:
-    registry_mirror: ""
 
   pre_tasks:
     - name: Check if system is supported
@@ -97,6 +95,31 @@
             update_cache: yes
           when: system_upgraded is success
 
+    - name: Configure kernel modules
+      block:
+        - name: Ensure required kernel modules are loaded
+          modprobe:
+            name: "{{ item }}"
+            state: present
+          loop:
+            - overlay
+            - br_netfilter
+            - kvm
+            - kvm_intel
+            - kvm_amd
+          ignore_errors: true
+
+        - name: Persist required kernel modules
+          copy:
+            dest: /etc/modules-load.d/99-local.conf
+            content: |
+              overlay
+              br_netfilter
+              kvm
+              kvm_intel
+              kvm_amd
+            mode: "0644"
+
     - name: Configure libvirt
       block:
         - name: Enable libvirtd service
@@ -128,6 +151,57 @@
               dynamic_ownership = 0
           when: ansible_distribution == "Debian"
       notify: Restart libvirtd
+
+    - name: Configure default libvirt storage pool
+      block:
+        - name: Check if default storage pool exists
+          command: virsh pool-info default
+          register: default_pool_check
+          ignore_errors: true
+          changed_when: false
+
+        - name: Check if images storage pool exists
+          command: virsh pool-info images
+          register: images_pool_check
+          ignore_errors: true
+          changed_when: false
+          when: default_pool_check.rc != 0
+
+        - name: Rename images pool to default (stop images pool)
+          command: virsh pool-destroy images
+          when: default_pool_check.rc != 0 and images_pool_check.rc == 0
+          ignore_errors: true
+
+        - name: Rename images pool to default (undefine images pool)
+          command: virsh pool-undefine images
+          when: default_pool_check.rc != 0 and images_pool_check.rc == 0
+
+        - name: Create default storage pool directory
+          file:
+            path: /var/lib/libvirt/images
+            state: directory
+            mode: "0755"
+          when: default_pool_check.rc != 0
+
+        - name: Define default storage pool
+          command: >
+            virsh pool-define-as default dir
+            --target /var/lib/libvirt/images
+          when: default_pool_check.rc != 0
+
+        - name: Build default storage pool
+          command: virsh pool-build default
+          when: default_pool_check.rc != 0
+          ignore_errors: true
+
+        - name: Start default storage pool
+          command: virsh pool-start default
+          when: default_pool_check.rc != 0
+          ignore_errors: true
+
+        - name: Set default storage pool to autostart
+          command: virsh pool-autostart default
+          when: default_pool_check.rc != 0
 
     # Workaround for sushy-tools ignoring BootSourceOverrideEnabled with libvirt driver.
     # Sushy-tools always sets boot device as "continuous" (persistent), ignoring one-time boot requests.
@@ -286,13 +360,15 @@
             state: started
 
     - name: Flush handlers to restart libvirtd before sushy-tools
-      meta: flush_handlers
+      block:
+        - name: Flush handlers
+          meta: flush_handlers
 
-    - name: Verify libvirtd is running
-      service:
-        name: libvirtd
-        state: started
-        enabled: yes
+        - name: Verify libvirtd is running
+          service:
+            name: libvirtd
+            state: started
+            enabled: yes
 
     - name: Install and configure Sushy Tools Redfish Emulator
       block:
@@ -579,12 +655,19 @@
           systemd:
             daemon_reload: yes
 
-        - name: Enable Sushy Tools service
+        - name: Enable and start Sushy Tools service
           systemd:
             name: sushy-emulator
             enabled: yes
             state: started
       notify: Restart sushy-emulator
+
+    - name: Display Redfish credentials
+      debug:
+        msg: |
+          Redfish API endpoint: https://localhost:8000/redfish/v1/
+          Username: admin
+          Password: {{ redfish_password }}
 
     - name: Handle system reboot check
       block:

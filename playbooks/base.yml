@@ -183,11 +183,29 @@
 
     - name: Configure SSH server
       block:
+        - name: Remove Include directives from sshd_config
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^\\s*#*\\s*Include"
+            state: absent
+
         - name: Configure root login restrictions
           lineinfile:
             path: /etc/ssh/sshd_config
-            regexp: "^#?PermitRootLogin"
+            regexp: "^\\s*#*\\s*PermitRootLogin"
             line: "PermitRootLogin prohibit-password"
+
+        - name: Disable password authentication
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^\\s*#*\\s*PasswordAuthentication"
+            line: "PasswordAuthentication no"
+
+        - name: Disable empty passwords
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^\\s*#*\\s*PermitEmptyPasswords"
+            line: "PermitEmptyPasswords no"
 
         - name: Remove cloud-init SSH configuration
           file:
@@ -246,6 +264,24 @@
         - name: Apply kernel parameters
           command: sysctl --system
           changed_when: false
+
+    - name: Configure systemd-resolved with fallback DNS
+      block:
+        - name: Create resolved.conf.d directory
+          file:
+            path: /etc/systemd/resolved.conf.d
+            state: directory
+            mode: "0755"
+
+        - name: Configure fallback DNS servers
+          copy:
+            dest: /etc/systemd/resolved.conf.d/fallback.conf
+            content: |
+              [Resolve]
+              DNS=8.8.8.8
+              FallbackDNS=1.1.1.1
+            mode: "0644"
+          notify: Restart systemd-resolved
 
     - name: Disable swap
       block:

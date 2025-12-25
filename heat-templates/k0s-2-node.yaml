@@ -38,7 +38,6 @@ parameters:
   ssh_pub_key:
     type: string
     description: "SSH public key for instance access"
-    default: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLrIiGjB4nPsyKzgzY21asVi/HKlveRnNY77vOhRhOA"
     label: "SSH Public Key"
     constraints:
       - length:
@@ -118,7 +117,7 @@ parameters:
     constraints:
       - allowed_values:
           - playbooks/k0s-deb.yml
-          - playbooks/k0s-deb-opt.yml
+          - playbooks/k0s-deb-crio.yml
         description: "Must be a known Ansible playbook"
 
 resources:
@@ -277,6 +276,12 @@ resources:
               - |
                 apt-get update && apt-get install -y ansible git || true
 
+                ansible-pull -U "https://github.com/s3rj1k/playground.git" playbooks/base.yml -vvvv
+                if [ $? -ne 0 ]; then
+                  %wc_notify% --data-binary "{\"status\": \"FAILURE\", \"reason\": \"Ansible playbook execution failed\"}"
+                  exit 1
+                fi
+
                 ansible-pull -U "https://github.com/s3rj1k/playground.git" \
                   %ansible_playbook% \
                   -vvvv \
@@ -344,6 +349,12 @@ resources:
 
                 WORKER_DATA=$(cat /tmp/worker_data.json | jq -r '."1"')
                 rm -f /tmp/worker_data.json
+
+                ansible-pull -U "https://github.com/s3rj1k/playground.git" playbooks/base.yml -vvvv
+                if [ $? -ne 0 ]; then
+                  %wc_notify% --data-binary "{\"status\": \"FAILURE\", \"reason\": \"Ansible playbook execution failed\"}"
+                  exit 1
+                fi
 
                 ansible-pull -U "https://github.com/s3rj1k/playground.git" \
                   %ansible_playbook% \

@@ -40,7 +40,6 @@ parameters:
   ssh_pub_key:
     type: string
     description: "SSH public key for instance access"
-    default: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLrIiGjB4nPsyKzgzY21asVi/HKlveRnNY77vOhRhOA"
     label: "SSH Public Key"
     constraints:
       - length:

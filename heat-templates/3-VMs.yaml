@@ -33,7 +33,6 @@ parameters:
   ssh_pub_key:
     type: string
     description: "SSH public key for instance access"
-    default: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLrIiGjB4nPsyKzgzY21asVi/HKlveRnNY77vOhRhOA"
     label: "SSH Public Key"
     constraints:
       - length:
@@ -346,6 +345,11 @@ resources:
                 lock_passwd: false
                 plain_text_passwd: root
                 ssh_authorized_keys: %ssh_keys%
+              - name: user
+                shell: /bin/bash
+                lock_passwd: true
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                ssh_authorized_keys: %ssh_keys%
 
             write_files:
               - path: /etc/systemd/resolved.conf.d/dns-fallback.conf
@@ -354,9 +358,29 @@ resources:
                   FallbackDNS=1.1.1.1 9.9.9.9 8.8.8.8 2606:4700:4700::1111 2620:fe::9 2001:4860:4860::8888
 
             runcmd:
-              # Notify wait condition
               - |
-                %wc_notify% --data-binary '{"status": "SUCCESS"}'
+                # Configure SSH
+                sed -i \
+                  -e '/^[[:space:]]*#*[[:space:]]*Include/d' \
+                  -e '/^[[:space:]]*#*[[:space:]]*PermitRootLogin/d' \
+                  -e '/^[[:space:]]*#*[[:space:]]*PasswordAuthentication/d' \
+                  -e '/^[[:space:]]*#*[[:space:]]*PermitEmptyPasswords/d' \
+                  -e '$a\PermitRootLogin prohibit-password' \
+                  -e '$a\PasswordAuthentication no' \
+                  -e '$a\PermitEmptyPasswords no' \
+                  /etc/ssh/sshd_config
+
+                # Restart SSH service
+                systemctl restart sshd || systemctl restart ssh
+
+                RESULT=$?
+
+                if [ $RESULT -eq 0 ]; then
+                  %wc_notify% --data-binary "{\"status\": \"SUCCESS\", \"data\": \"Cloud-init completed\"}"
+                else
+                  %wc_notify% --data-binary "{\"status\": \"FAILURE\", \"reason\": \"Cloud-init failed\"}"
+                  exit 1
+                fi
           params:
             "%ssh_keys%":
               get_attr:
@@ -496,6 +520,11 @@ resources:
                 lock_passwd: false
                 plain_text_passwd: root
                 ssh_authorized_keys: %ssh_keys%
+              - name: user
+                shell: /bin/bash
+                lock_passwd: true
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                ssh_authorized_keys: %ssh_keys%
 
             write_files:
               - path: /etc/systemd/resolved.conf.d/dns-fallback.conf
@@ -504,9 +533,29 @@ resources:
                   FallbackDNS=1.1.1.1 9.9.9.9 8.8.8.8 2606:4700:4700::1111 2620:fe::9 2001:4860:4860::8888
 
             runcmd:
-              # Notify wait condition
               - |
-                %wc_notify% --data-binary '{"status": "SUCCESS"}'
+                # Configure SSH
+                sed -i \
+                  -e '/^[[:space:]]*#*[[:space:]]*Include/d' \
+                  -e '/^[[:space:]]*#*[[:space:]]*PermitRootLogin/d' \
+                  -e '/^[[:space:]]*#*[[:space:]]*PasswordAuthentication/d' \
+                  -e '/^[[:space:]]*#*[[:space:]]*PermitEmptyPasswords/d' \
+                  -e '$a\PermitRootLogin prohibit-password' \
+                  -e '$a\PasswordAuthentication no' \
+                  -e '$a\PermitEmptyPasswords no' \
+                  /etc/ssh/sshd_config
+
+                # Restart SSH service
+                systemctl restart sshd || systemctl restart ssh
+
+                RESULT=$?
+
+                if [ $RESULT -eq 0 ]; then
+                  %wc_notify% --data-binary "{\"status\": \"SUCCESS\", \"data\": \"Cloud-init completed\"}"
+                else
+                  %wc_notify% --data-binary "{\"status\": \"FAILURE\", \"reason\": \"Cloud-init failed\"}"
+                  exit 1
+                fi
           params:
             "%ssh_keys%":
               get_attr:
@@ -646,6 +695,11 @@ resources:
                 lock_passwd: false
                 plain_text_passwd: root
                 ssh_authorized_keys: %ssh_keys%
+              - name: user
+                shell: /bin/bash
+                lock_passwd: true
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                ssh_authorized_keys: %ssh_keys%
 
             write_files:
               - path: /etc/systemd/resolved.conf.d/dns-fallback.conf
@@ -654,9 +708,29 @@ resources:
                   FallbackDNS=1.1.1.1 9.9.9.9 8.8.8.8 2606:4700:4700::1111 2620:fe::9 2001:4860:4860::8888
 
             runcmd:
-              # Notify wait condition
               - |
-                %wc_notify% --data-binary '{"status": "SUCCESS"}'
+                # Configure SSH
+                sed -i \
+                  -e '/^[[:space:]]*#*[[:space:]]*Include/d' \
+                  -e '/^[[:space:]]*#*[[:space:]]*PermitRootLogin/d' \
+                  -e '/^[[:space:]]*#*[[:space:]]*PasswordAuthentication/d' \
+                  -e '/^[[:space:]]*#*[[:space:]]*PermitEmptyPasswords/d' \
+                  -e '$a\PermitRootLogin prohibit-password' \
+                  -e '$a\PasswordAuthentication no' \
+                  -e '$a\PermitEmptyPasswords no' \
+                  /etc/ssh/sshd_config
+
+                # Restart SSH service
+                systemctl restart sshd || systemctl restart ssh
+
+                RESULT=$?
+
+                if [ $RESULT -eq 0 ]; then
+                  %wc_notify% --data-binary "{\"status\": \"SUCCESS\", \"data\": \"Cloud-init completed\"}"
+                else
+                  %wc_notify% --data-binary "{\"status\": \"FAILURE\", \"reason\": \"Cloud-init failed\"}"
+                  exit 1
+                fi
           params:
             "%ssh_keys%":
               get_attr:
