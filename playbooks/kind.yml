@@ -4,7 +4,7 @@
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/kind.yml
 
 ---
-- name: Kind on AMD64
+- name: Kind on Debian/Ubuntu AMD64
   hosts: localhost
   connection: local
   become: true

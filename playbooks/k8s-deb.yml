@@ -34,7 +34,7 @@
 #   kubectl get lease cilium-l2announce-kube-system-kubernetes-external -n kube-system -o jsonpath='{.spec.holderIdentity}{"\n"}'
 
 ---
-- name: Kubernetes (k8s) on Debian AMD64
+- name: Kubernetes (k8s) on Debian/Ubuntu AMD64
   hosts: localhost
   connection: local
   become: true
@@ -82,13 +82,6 @@
       when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
 
   handlers:
-    - name: Restart sshd
-      systemd:
-        name: ssh
-        state: restarted
-        daemon_reload: yes
-      when: ansible_service_mgr == 'systemd'
-
     - name: Restart crio
       systemd:
         name: crio
@@ -97,74 +90,6 @@
       when: ansible_service_mgr == 'systemd'
 
   tasks:
-    - name: Clean up system packages and snap
-      block:
-        - name: Remove all snap packages
-          shell: |
-            snap list | awk '!/^Name|^core|^snapd|^lxd/ {print $1}' | xargs -r snap remove --purge
-            snap list | awk '/^lxd/ {print $1}' | xargs -r snap remove --purge
-            snap list | awk '/^core/ {print $1}' | xargs -r snap remove --purge
-            snap list | awk '/^snapd/ {print $1}' | xargs -r snap remove --purge
-            snap list | awk '!/^Name/ {print $1}' | xargs -r snap remove --purge
-          ignore_errors: true
-          when: ansible_distribution == "Ubuntu"
-
-        - name: Remove system packages
-          apt:
-            name:
-              - lxd
-              - lxd-agent-loader
-              - lxd-installer
-              - plymouth
-              - snapd
-            state: absent
-            purge: yes
-            autoremove: yes
-
-        - name: Remove snap directories
-          file:
-            path: "{{ item }}"
-            state: absent
-          loop:
-            - /root/snap
-            - /run/snapd
-            - /snap
-            - /var/cache/snapd
-            - /var/snap
-
-        - name: Mask unnecessary systemd units
-          systemd:
-            name: "{{ item }}"
-            masked: yes
-          loop:
-            - lxd-installer.socket
-            - plymouth-quit-wait.service
-            - plymouth-quit.service
-            - plymouth-read-write.service
-            - plymouth-start.service
-            - snapd.mounts-pre.target
-            - snapd.seeded.service
-          ignore_errors: true
-
-    - name: Remove system users and groups
-      block:
-        - name: Remove users
-          user:
-            name: "{{ item }}"
-            state: absent
-            remove: yes
-          loop:
-            - lxd
-          ignore_errors: true
-
-        - name: Remove groups
-          group:
-            name: "{{ item }}"
-            state: absent
-          loop:
-            - lxd
-          ignore_errors: true
-
     - name: Update and upgrade system packages
       apt:
         update_cache: yes
@@ -234,13 +159,6 @@
               - gettext-base
               - gnupg
               - tar
-              # Locale
-              - locales
-              # SSH
-              - openssh-server
-              # GIT
-              - git
-              - git-lfs
               # Multipath
               - multipath-tools
               # Security
@@ -252,8 +170,6 @@
               - libnetfilter-cttimeout1
               - libnetfilter-log1
               - socat
-              # Containers
-              - buildah
               # Kubernetes
               - cri-o
               - kubeadm
@@ -262,75 +178,10 @@
               # Text and JSON processing
               - gawk
               - jq
-              - nano
               - sed
-              - yq
-              # TUI
-              - mc
             state: present
             update_cache: yes
           when: system_upgraded is success
-
-    - name: Install clusterctl
-      block:
-        - name: Get latest version
-          uri:
-            url: "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest"
-            return_content: yes
-          register: release_info
-
-        - name: Set version
-          set_fact:
-            # curl -s "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest" | jq -r ".tag_name"
-            version: "{{ release_info.json.tag_name }}"
-          when: release_info is defined and release_info.status == 200
-
-        - name: Download and Install clusterctl binary {{ version | default('') }}
-          get_url:
-            url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ version }}/clusterctl-linux-amd64"
-            dest: /usr/local/bin/clusterctl
-            mode: "0755"
-          when: version | trim | length > 0
-      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-    - name: Configure and generate locale
-      block:
-        - name: Set locale in configuration
-          copy:
-            dest: /etc/default/locale
-            content: |
-              LANG=C.UTF-8
-
-        - name: Generate locale
-          command: locale-gen en_US.UTF-8
-          changed_when: false
-
-    - name: Configure SSH client
-      copy:
-        dest: /etc/ssh/ssh_config
-        content: |
-          Host *
-            AddressFamily inet
-            ForwardAgent yes
-            PasswordAuthentication no
-            # CheckHostIP no
-            # HashKnownHosts no
-            # StrictHostKeyChecking no
-
-    - name: Configure SSH server
-      block:
-        - name: Configure root login restrictions
-          lineinfile:
-            path: /etc/ssh/sshd_config
-            regexp: "^#?PermitRootLogin"
-            line: "PermitRootLogin prohibit-password"
-          notify: Restart sshd
-
-        - name: Remove cloud-init SSH configuration
-          file:
-            path: /etc/ssh/sshd_config.d/60-cloudimg-settings.conf
-            state: absent
-          notify: Restart sshd
 
     - name: Configure multipath
       block:
@@ -602,22 +453,6 @@
           when:
             - k8s_releases_filtered is defined
             - k8s_releases_filtered | trim | length == 0
-
-        - name: Create .kube directory for root user
-          file:
-            path: /root/.kube
-            state: directory
-            owner: root
-            group: root
-            mode: "0700"
-
-        - name: Create symlink from admin.conf to .kube/config
-          file:
-            src: /etc/kubernetes/admin.conf
-            dest: /root/.kube/config
-            state: link
-            force: true
-            follow: false
 
         - name: Check if Kubernetes cluster is already running
           command: kubectl get nodes
@@ -1075,14 +910,6 @@
           retries: 5
           delay: 30
       when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
-
-    - name: Mask unnecessary systemd units
-      systemd:
-        name: "{{ item }}"
-        masked: yes
-      loop:
-        - display-manager.service
-      ignore_errors: true
 
     - name: Handle system reboot check
       block:

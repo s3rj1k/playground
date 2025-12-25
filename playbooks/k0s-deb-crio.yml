@@ -1,8 +1,8 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: MIT
 
-# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k0s-deb-opt.yml
-#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "ENABLE_DYNAMIC_CONFIG=true" playbooks/k0s-deb-opt.yml
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k0s-deb-crio.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "ENABLE_DYNAMIC_CONFIG=true" playbooks/k0s-deb-crio.yml
 
 ---
 - name: Kubernetes (k0s) on Debian/Ubuntu AMD64
@@ -44,13 +44,6 @@
       when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
 
   handlers:
-    - name: Restart sshd
-      systemd:
-        name: ssh
-        state: restarted
-        daemon_reload: yes
-      when: ansible_service_mgr == 'systemd'
-
     - name: Restart crio
       systemd:
         name: crio
@@ -59,73 +52,6 @@
       when: ansible_service_mgr == 'systemd'
 
   tasks:
-    - name: Clean up system packages and snap
-      block:
-        - name: Remove all snap packages
-          shell: |
-            snap list | awk '!/^Name|^core|^snapd|^lxd/ {print $1}' | xargs -r snap remove --purge
-            snap list | awk '/^lxd/ {print $1}' | xargs -r snap remove --purge
-            snap list | awk '/^core/ {print $1}' | xargs -r snap remove --purge
-            snap list | awk '/^snapd/ {print $1}' | xargs -r snap remove --purge
-            snap list | awk '!/^Name/ {print $1}' | xargs -r snap remove --purge
-          ignore_errors: true
-          when: ansible_distribution == "Ubuntu"
-
-        - name: Remove system packages
-          apt:
-            name:
-              - lxd
-              - lxd-agent-loader
-              - lxd-installer
-              - plymouth
-              - snapd
-            state: absent
-            purge: yes
-            autoremove: yes
-
-        - name: Remove snap directories
-          file:
-            path: "{{ item }}"
-            state: absent
-          loop:
-            - /root/snap
-            - /run/snapd
-            - /snap
-            - /var/cache/snapd
-            - /var/snap
-
-        - name: Mask unnecessary systemd units
-          systemd:
-            name: "{{ item }}"
-            masked: yes
-          loop:
-            - lxd-installer.socket
-            - plymouth-quit-wait.service
-            - plymouth-quit.service
-            - plymouth-read-write.service
-            - plymouth-start.service
-            - snapd.mounts-pre.target
-            - snapd.seeded.service
-
-    - name: Remove system users and groups
-      block:
-        - name: Remove users
-          user:
-            name: "{{ item }}"
-            state: absent
-            remove: yes
-          loop:
-            - lxd
-          ignore_errors: true
-
-        - name: Remove groups
-          group:
-            name: "{{ item }}"
-            state: absent
-          loop:
-            - lxd
-          ignore_errors: true
-
     - name: Update and upgrade system packages
       apt:
         update_cache: yes
@@ -172,68 +98,15 @@
               - apt-transport-https
               - ca-certificates
               - curl
-              - gettext-base
-              - gnupg
-              - tar
-              # Locale
-              - locales
-              # SSH
-              - openssh-server
-              # GIT
-              - git
-              - git-lfs
-              # Multipath
-              - multipath-tools
-              # Security
-              - libseccomp2
-              # Networking
-              - ebtables
-              - iproute2
-              - libnetfilter-acct1
-              - libnetfilter-cttimeout1
-              - libnetfilter-log1
-              - socat
-              # Python dependencies
-              - python3
-              - python3-pip
-              - python3-yaml
-              # Containers
-              - buildah
               # Kubernetes
               - cri-o
               # Text and JSON processing
               - gawk
               - jq
-              - nano
               - sed
-              - yq
-              # TUI
-              - mc
             state: present
             update_cache: yes
           when: system_upgraded is success
-
-    - name: Install clusterctl
-      block:
-        - name: Get latest version
-          uri:
-            url: "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest"
-            return_content: yes
-          register: release_info
-
-        - name: Set version
-          set_fact:
-            # curl -s "https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest" | jq -r ".tag_name"
-            version: "{{ release_info.json.tag_name }}"
-          when: release_info is defined and release_info.status == 200
-
-        - name: Download and Install clusterctl binary ({{ version }})
-          get_url:
-            url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ version }}/clusterctl-linux-amd64"
-            dest: /usr/local/bin/clusterctl
-            mode: "0755"
-          when: version is defined
-      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     - name: Install Cilium CLI
       block:
@@ -261,220 +134,6 @@
             remote_src: yes
             mode: "0755"
           when: cilium_version is defined
-      when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-    - name: Configure and generate locale
-      block:
-        - name: Set locale in configuration
-          copy:
-            dest: /etc/default/locale
-            content: |
-              LANG=C.UTF-8
-
-        - name: Generate locale
-          command: locale-gen en_US.UTF-8
-          changed_when: false
-
-    - name: Configure SSH client
-      copy:
-        dest: /etc/ssh/ssh_config
-        content: |
-          Host *
-            AddressFamily inet
-            ForwardAgent yes
-            PasswordAuthentication no
-            # CheckHostIP no
-            # HashKnownHosts no
-            # StrictHostKeyChecking no
-
-    - name: Configure SSH server
-      block:
-        - name: Configure root login restrictions
-          lineinfile:
-            path: /etc/ssh/sshd_config
-            regexp: "^#?PermitRootLogin"
-            line: "PermitRootLogin prohibit-password"
-          notify: Restart sshd
-
-        - name: Remove cloud-init SSH configuration
-          file:
-            path: /etc/ssh/sshd_config.d/60-cloudimg-settings.conf
-            state: absent
-          notify: Restart sshd
-
-    - name: Configure multipath
-      block:
-        - name: Create multipath configuration file
-          copy:
-            dest: /etc/multipath.conf
-            content: |
-              defaults {
-                user_friendly_names yes
-              }
-            mode: "0644"
-          register: multipath_conf
-
-        - name: Enable and start multipathd service
-          systemd:
-            name: multipathd
-            enabled: yes
-            state: started
-
-        - name: Restart multipathd service on configuration change
-          systemd:
-            name: multipathd
-            state: restarted
-          when: multipath_conf is changed
-
-    - name: Configure kernel modules
-      block:
-        - name: Ensure required kernel modules are loaded
-          shell: modprobe {{ item }}
-          loop:
-            - overlay
-            - br_netfilter
-          changed_when: false
-
-        - name: Persist required kernel modules
-          copy:
-            dest: /etc/modules-load.d/99-local.conf
-            content: |
-              overlay
-              br_netfilter
-            mode: "0644"
-
-        - name: Configure kernel parameters
-          copy:
-            dest: /etc/sysctl.d/99-local.conf
-            content: |
-              fs.inotify.max_user_instances = 8192
-              fs.inotify.max_user_watches = 524288
-              kernel.panic = 10
-              kernel.panic_on_oops = 1
-              net.bridge.bridge-nf-call-ip6tables = 1
-              net.bridge.bridge-nf-call-iptables = 1
-              net.ipv4.conf.all.rp_filter = 1
-              net.ipv4.ip_forward = 1
-              net.ipv4.tcp_congestion_control = bbr
-              net.ipv6.conf.all.disable_ipv6 = 0
-              net.ipv6.conf.all.forwarding = 1
-              vm.overcommit_memory = 1
-            mode: "0644"
-
-        - name: Apply kernel parameters
-          command: sysctl --system
-          changed_when: false
-
-    - name: Disable swap
-      block:
-        - name: Disable swap memory
-          shell: |
-            swapoff -a
-          when: ansible_memory_mb.swap.total != 0
-
-        - name: Disable swap entries in fstab
-          lineinfile:
-            path: /etc/fstab
-            regexp: '^([^#].*\s+swap\s+.*)$'
-            line: '#\1'
-            backrefs: yes
-          when: ansible_memory_mb.swap.total != 0
-
-    - name: Configure GRUB
-      block:
-        - name: Create GRUB configuration directory
-          file:
-            path: /etc/default/grub.d
-            state: directory
-            mode: "0755"
-
-        - name: Configure GRUB settings
-          copy:
-            dest: /etc/default/grub.d/50-settings.cfg
-            content: |
-              # Set the recordfail timeout
-              GRUB_RECORDFAIL_TIMEOUT=0
-
-              # Do not wait on grub prompt
-              GRUB_TIMEOUT=0
-
-              # Set the default commandline
-              GRUB_CMDLINE_LINUX_DEFAULT="console=tty1 console=ttyS0 transparent_hugepage=madvise"
-
-              # Set the grub console type
-              GRUB_TERMINAL=console
-            mode: "0644"
-          register: grub_config
-
-        - name: Update GRUB configuration
-          command: update-grub
-          when: grub_config is changed
-
-    - name: Install etcd network tuning script and udev rule
-      block:
-        - name: Create directory for scripts
-          file:
-            path: /usr/local/sbin
-            state: directory
-            mode: "0755"
-            owner: root
-            group: root
-
-        - name: Install etcd network tuning script
-          copy:
-            dest: /usr/local/sbin/etcd-network-tuning.sh
-            content: |
-              #!/bin/bash
-
-              export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-              set -o errexit  # exits immediately on any unexpected error (does not bypass traps)
-              set -o nounset  # will error if variables are used without first being defined
-              set -o pipefail # any non-zero exit code in a piped command causes the pipeline to fail with that code
-
-              trap on_exit ERR
-              on_exit() {
-                  echo "Error setting etcd network tuning parameters for interface: ${DEV}" | systemd-cat -p emerg -t etcd-tuning
-              }
-
-              if [ "$#" -ne 1 ]; then
-                  echo "Error: Usage: $0 <dev>" | systemd-cat -p emerg -t etcd-tuning
-                  exit 1
-              fi
-
-              DEV=$1
-
-              echo "Setting etcd network tuning parameters for interface: ${DEV}" | systemd-cat -p info -t etcd-tuning
-              tc qdisc del dev ${DEV} root 2>/dev/null || true
-              tc qdisc add dev ${DEV} root handle 1: prio bands 3
-              tc filter add dev ${DEV} parent 1: protocol ip prio 1 u32 match ip sport 2380 0xffff flowid 1:1
-              tc filter add dev ${DEV} parent 1: protocol ip prio 1 u32 match ip dport 2380 0xffff flowid 1:1
-              tc filter add dev ${DEV} parent 1: protocol ip prio 2 u32 match ip sport 2379 0xffff flowid 1:1
-              tc filter add dev ${DEV} parent 1: protocol ip prio 2 u32 match ip dport 2379 0xffff flowid 1:1
-
-              exit 0
-            mode: "0755"
-            owner: root
-            group: root
-          register: script_install
-
-        - name: Install udev rule for etcd network tuning
-          copy:
-            dest: /etc/udev/rules.d/90-etcd-network-tuning.rules
-            content: |
-              ACTION=="add", SUBSYSTEM=="net", SUBSYSTEMS=="pci|xen|vmbus" RUN+="/usr/local/sbin/etcd-network-tuning.sh $name"
-            mode: "0644"
-            owner: root
-            group: root
-          register: udev_rule_install
-
-        - name: Reload udev rules if changed
-          command: udevadm control --reload-rules
-          when: udev_rule_install.changed
-
-        - name: Trigger udev events for network interfaces if script or rules changed
-          shell: find /sys/class/net -mindepth 1 -maxdepth 1 -type l -name "[a-z]*" -not -name "lo" -printf "%f\n" | xargs -I{} udevadm trigger --action=add --subsystem-match=net --sysname-match={}
-          when: script_install.changed or udev_rule_install.changed
       when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
 
     - name: Configure CRI-O
@@ -693,20 +352,6 @@
             enabled: yes
           when: WORKER_DATA is defined and WORKER_DATA | trim | length > 0
 
-        - name: Create k0s shell configuration file
-          copy:
-            dest: /etc/profile.d/k0s.sh
-            content: |
-              export KUBECONFIG=/var/lib/k0s/pki/admin.conf
-            mode: "0755"
-          when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-        - name: Create kubectl symlink
-          file:
-            src: /usr/local/bin/k0s
-            dest: /usr/local/bin/kubectl
-            state: link
-
     - name: Install and configure Cilium CNI
       block:
         - name: Install Cilium CNI with L2 announcements
@@ -811,13 +456,6 @@
                 annotations:
                   storageclass.kubernetes.io/is-default-class: "true"
       when: WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
-
-    - name: Mask unnecessary systemd units
-      systemd:
-        name: "{{ item }}"
-        masked: yes
-      loop:
-        - display-manager.service
 
     - name: Handle system reboot check
       block:

@@ -4,7 +4,7 @@
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/base.yml
 
 ---
-- name: Base config on AMD64
+- name: Base config on Debian/Ubuntu AMD64
   hosts: localhost
   connection: local
   become: true
@@ -65,6 +65,9 @@
         - name: Remove system packages
           apt:
             name:
+              - lxd
+              - lxd-agent-loader
+              - lxd-installer
               - plymouth
               - snapd
             state: absent
@@ -87,12 +90,33 @@
             name: "{{ item }}"
             masked: yes
           loop:
+            - lxd-installer.socket
             - plymouth-quit-wait.service
             - plymouth-quit.service
             - plymouth-read-write.service
             - plymouth-start.service
             - snapd.mounts-pre.target
             - snapd.seeded.service
+          ignore_errors: true
+
+    - name: Remove system users and groups
+      block:
+        - name: Remove users
+          user:
+            name: "{{ item }}"
+            state: absent
+            remove: yes
+          loop:
+            - lxd
+          ignore_errors: true
+
+        - name: Remove groups
+          group:
+            name: "{{ item }}"
+            state: absent
+          loop:
+            - lxd
+          ignore_errors: true
 
     - name: Update and upgrade system packages
       apt:
@@ -120,10 +144,17 @@
               # GIT
               - git
               - git-lfs
+              # Multipath
+              - multipath-tools
+              # Security
+              - libseccomp2
               # Networking
               - ebtables
               - ethtool
               - iproute2
+              - libnetfilter-acct1
+              - libnetfilter-cttimeout1
+              - libnetfilter-log1
               - socat
               # Text and JSON processing
               - gawk
@@ -138,6 +169,18 @@
             update_cache: yes
           when: system_upgraded is success
 
+    - name: Configure SSH client
+      copy:
+        dest: /etc/ssh/ssh_config
+        content: |
+          Host *
+            AddressFamily inet
+            ForwardAgent yes
+            PasswordAuthentication no
+            # CheckHostIP no
+            # HashKnownHosts no
+            # StrictHostKeyChecking no
+
     - name: Configure SSH server
       block:
         - name: Configure root login restrictions
@@ -151,6 +194,18 @@
             path: /etc/ssh/sshd_config.d/60-cloudimg-settings.conf
             state: absent
       notify: Restart sshd
+
+    - name: Configure and generate locale
+      block:
+        - name: Set locale in configuration
+          copy:
+            dest: /etc/default/locale
+            content: |
+              LANG=C.UTF-8
+
+        - name: Generate locale
+          command: locale-gen en_US.UTF-8
+          changed_when: false
 
     - name: Configure kernel modules
       block:
@@ -236,6 +291,37 @@
         - name: Update GRUB configuration
           command: update-grub
           when: grub_config is changed
+
+    - name: Configure multipath
+      block:
+        - name: Create multipath configuration file
+          copy:
+            dest: /etc/multipath.conf
+            content: |
+              defaults {
+                user_friendly_names yes
+              }
+            mode: "0644"
+          register: multipath_conf
+
+        - name: Enable and start multipathd service
+          systemd:
+            name: multipathd
+            enabled: yes
+            state: started
+
+        - name: Restart multipathd service on configuration change
+          systemd:
+            name: multipathd
+            state: restarted
+          when: multipath_conf is changed
+
+    - name: Mask unnecessary systemd units
+      systemd:
+        name: "{{ item }}"
+        masked: yes
+      loop:
+        - display-manager.service
 
     - name: Handle system reboot check
       block:

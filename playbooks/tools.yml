@@ -4,7 +4,7 @@
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/tools.yml
 
 ---
-- name: Kubernetes related tools on AMD64
+- name: Kubernetes related tools on Debian/Ubuntu AMD64
   hosts: localhost
   connection: local
   become: true

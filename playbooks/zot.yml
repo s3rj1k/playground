@@ -1,7 +1,7 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: MIT
 
-# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git k0s/zot.yml
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/zot.yml
 
 ---
 - name: Image Registry (zot) on Debian/Ubuntu AMD64
