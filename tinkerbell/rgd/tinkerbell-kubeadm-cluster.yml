@@ -1,0 +1,450 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: tinkerbellkubeadmcluster.v1alpha1.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TinkerbellKubeadmCluster
+    spec:
+      name: string
+      namespace: string | default=capi-system
+      kubernetesVersion: string | default=v1.34.2
+      controlPlaneEndpoint:
+        host: string
+        port: integer | default=6443
+      network:
+        podCIDR: string | default=192.168.0.0/16
+        serviceCIDR: string | default=172.26.0.0/16
+      controlPlane:
+        replicas: integer | default=1
+      workers:
+        replicas: integer | default=1
+      image:
+        registry: string | default=ghcr.io/s3rj1k/playground
+        osDistro: string | default=ubuntu
+        osVersion: string | default="2404"
+      kubeVip:
+        version: string | default=v1.0.3
+      user:
+        name: string | default=tink
+        passwordHash: string | default="!"
+        sshAuthorizedKeys: "[]string | default=[]"
+    status:
+      clusterReady: ${cluster.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      controlPlaneReady: ${controlPlane.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+  resources:
+    # Cluster
+    - id: cluster
+      template:
+        apiVersion: cluster.x-k8s.io/v1beta2
+        kind: Cluster
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+          labels:
+            cni: cilium
+        spec:
+          clusterNetwork:
+            pods:
+              cidrBlocks:
+                - ${schema.spec.network.podCIDR}
+            services:
+              cidrBlocks:
+                - ${schema.spec.network.serviceCIDR}
+          controlPlaneEndpoint:
+            host: ${schema.spec.controlPlaneEndpoint.host}
+            port: ${schema.spec.controlPlaneEndpoint.port}
+          controlPlaneRef:
+            apiGroup: controlplane.cluster.x-k8s.io
+            kind: KubeadmControlPlane
+            name: ${schema.spec.name}-control-plane
+          infrastructureRef:
+            apiGroup: infrastructure.cluster.x-k8s.io
+            kind: TinkerbellCluster
+            name: ${schema.spec.name}
+
+    # TinkerbellCluster Infrastructure
+    - id: tinkerbellCluster
+      template:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: TinkerbellCluster
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          controlPlaneEndpoint:
+            host: ${schema.spec.controlPlaneEndpoint.host}
+            port: ${schema.spec.controlPlaneEndpoint.port}
+          imageLookupBaseRegistry: ${schema.spec.image.registry}
+          imageLookupFormat: "{{.BaseRegistry}}/{{.OSDistro}}-{{.OSVersion}}:{{.KubernetesVersion}}.gz"
+          imageLookupOSDistro: ${schema.spec.image.osDistro}
+          imageLookupOSVersion: ${schema.spec.image.osVersion}
+
+    # Cilium HelmChartProxy
+    - id: ciliumAddon
+      template:
+        apiVersion: addons.cluster.x-k8s.io/v1alpha1
+        kind: HelmChartProxy
+        metadata:
+          name: cilium
+          namespace: ${schema.spec.namespace}
+        spec:
+          clusterSelector:
+            matchLabels:
+              cni: cilium
+          repoURL: https://helm.cilium.io
+          chartName: cilium
+          namespace: kube-system
+          releaseName: cilium
+          valuesTemplate: |
+            ipam:
+              mode: kubernetes
+            k8sServiceHost: {{ .Cluster.spec.controlPlaneEndpoint.host }}
+            k8sServicePort: {{ .Cluster.spec.controlPlaneEndpoint.port }}
+            tolerations:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+                effect: NoSchedule
+              - key: node.cluster.x-k8s.io/uninitialized
+                operator: Exists
+                effect: NoSchedule
+              - key: node.kubernetes.io/not-ready
+                operator: Exists
+                effect: NoSchedule
+            operator:
+              tolerations:
+                - key: node-role.kubernetes.io/control-plane
+                  operator: Exists
+                  effect: NoSchedule
+                - key: node.cluster.x-k8s.io/uninitialized
+                  operator: Exists
+                  effect: NoSchedule
+                - key: node.kubernetes.io/not-ready
+                  operator: Exists
+                  effect: NoSchedule
+            envoy:
+              tolerations:
+                - key: node-role.kubernetes.io/control-plane
+                  operator: Exists
+                  effect: NoSchedule
+                - key: node.cluster.x-k8s.io/uninitialized
+                  operator: Exists
+                  effect: NoSchedule
+                - key: node.kubernetes.io/not-ready
+                  operator: Exists
+                  effect: NoSchedule
+
+    # KubeadmControlPlane
+    - id: controlPlane
+      template:
+        apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+        kind: KubeadmControlPlane
+        metadata:
+          name: ${schema.spec.name}-control-plane
+          namespace: ${schema.spec.namespace}
+        spec:
+          kubeadmConfigSpec:
+            initConfiguration:
+              nodeRegistration:
+                kubeletExtraArgs:
+                  - name: provider-id
+                    value: PROVIDER_ID
+            joinConfiguration:
+              nodeRegistration:
+                ignorePreflightErrors:
+                  - DirAvailable--etc-kubernetes-manifests
+                kubeletExtraArgs:
+                  - name: provider-id
+                    value: PROVIDER_ID
+            preKubeadmCommands:
+              - |-
+                mkdir -p /etc/kubernetes/manifests
+                ctr images pull ghcr.io/kube-vip/kube-vip:${schema.spec.kubeVip.version}
+
+                DEFAULT_INTERFACE=$(ip -4 -j route list default | jq -r .[0].dev)
+
+                ctr run --rm --net-host \
+                  ghcr.io/kube-vip/kube-vip:${schema.spec.kubeVip.version} vip \
+                  /kube-vip manifest pod \
+                  --arp \
+                  --interface "" \
+                  --address "${schema.spec.controlPlaneEndpoint.host}" \
+                  --controlplane \
+                  --leaderElection \
+                  --k8sConfigPath /etc/kubernetes/super-admin.conf \
+                  > /etc/kubernetes/manifests/kube-vip.yaml
+            users:
+              - name: ${schema.spec.user.name}
+                passwd: ${schema.spec.user.passwordHash}
+                sshAuthorizedKeys: ${schema.spec.user.sshAuthorizedKeys}
+                sudo: ALL=(ALL) NOPASSWD:ALL
+          machineTemplate:
+            spec:
+              infrastructureRef:
+                apiGroup: infrastructure.cluster.x-k8s.io
+                kind: TinkerbellMachineTemplate
+                name: ${schema.spec.name}-control-plane
+          replicas: ${schema.spec.controlPlane.replicas}
+          version: ${schema.spec.kubernetesVersion}
+
+    # Control Plane TinkerbellMachineTemplate
+    - id: controlPlaneMachineTemplate
+      template:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: TinkerbellMachineTemplate
+        metadata:
+          name: ${schema.spec.name}-control-plane
+          namespace: ${schema.spec.namespace}
+        spec:
+          template:
+            spec:
+              bootOptions:
+                bootMode: customboot
+                custombootConfig:
+                  preparingActions:
+                    - powerAction: "off"
+                    - bootDevice:
+                        device: "pxe"
+                        efiBoot: true
+                    - powerAction: "on"
+                  postActions:
+                    - powerAction: "off"
+                    - bootDevice:
+                        device: "disk"
+                        persistent: true
+                        efiBoot: true
+                    - powerAction: "on"
+              hardwareAffinity:
+                required:
+                  - labelSelector:
+                      matchLabels:
+                        tinkerbell.org/role: control-plane
+              templateOverride: |-
+                version: "0.1"
+                name: playground-template
+                global_timeout: 9000
+                tasks:
+                  - name: "playground-template"
+                    worker: "{{.device_1}}"
+                    volumes:
+                      - /dev:/dev
+                      - /dev/console:/dev/console
+                      - /lib/firmware:/lib/firmware:ro
+                    actions:
+                      - name: "Stream Ubuntu Image"
+                        image: quay.io/tinkerbell/actions/oci2disk:latest
+                        timeout: 3000
+                        environment:
+                          DEST_DISK: {{ index .Hardware.Disks 0 }}
+                          IMG_URL: ${schema.spec.image.registry}/${schema.spec.image.osDistro}-${schema.spec.image.osVersion}:${schema.spec.kubernetesVersion}.gz
+                          COMPRESSED: true
+                      - name: "Grow Partition"
+                        image: quay.io/tinkerbell/actions/cexec:latest
+                        timeout: 90
+                        environment:
+                          BLOCK_DEVICE: {{ index .Hardware.Disks 0 }}3
+                          FS_TYPE: ext4
+                          CHROOT: y
+                          DEFAULT_INTERPRETER: "/bin/sh -c"
+                          CMD_LINE: "growpart {{ index .Hardware.Disks 0 }} 3 && resize2fs {{ index .Hardware.Disks 0 }}3"
+                      - name: "Add Tink Cloud-Init Config"
+                        image: quay.io/tinkerbell/actions/writefile:latest
+                        timeout: 90
+                        environment:
+                          DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
+                          FS_TYPE: ext4
+                          DEST_PATH: /etc/cloud/cloud.cfg.d/10_tinkerbell.cfg
+                          UID: 0
+                          GID: 0
+                          MODE: 0600
+                          DIRMODE: 0700
+                          CONTENTS: |
+                            datasource:
+                              Ec2:
+                                metadata_urls: ["http://{{ (index .Hardware.Interfaces 0).DHCP.IP.Gateway }}:7172"]
+                                strict_id: false
+                            manage_etc_hosts: localhost
+                            warnings:
+                              dsid_missing_source: off
+                      - name: "Add Tink Cloud-Init DS-Identity"
+                        image: quay.io/tinkerbell/actions/writefile:latest
+                        timeout: 90
+                        environment:
+                          DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
+                          FS_TYPE: ext4
+                          DEST_PATH: /etc/cloud/ds-identify.cfg
+                          UID: 0
+                          GID: 0
+                          MODE: 0600
+                          DIRMODE: 0700
+                          CONTENTS: |
+                            datasource: Ec2
+                      - name: "Shutdown"
+                        image: ghcr.io/jacobweinstock/waitdaemon:latest
+                        timeout: 90
+                        pid: host
+                        command: ["shutdown"]
+                        environment:
+                          IMAGE: alpine
+                          WAIT_SECONDS: 10
+                        volumes:
+                          - /var/run/docker.sock:/var/run/docker.sock
+
+    # Worker TinkerbellMachineTemplate
+    - id: workerMachineTemplate
+      template:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: TinkerbellMachineTemplate
+        metadata:
+          name: ${schema.spec.name}-worker
+          namespace: ${schema.spec.namespace}
+        spec:
+          template:
+            spec:
+              bootOptions:
+                bootMode: customboot
+                custombootConfig:
+                  preparingActions:
+                    - powerAction: "off"
+                    - bootDevice:
+                        device: "pxe"
+                        efiBoot: true
+                    - powerAction: "on"
+                  postActions:
+                    - powerAction: "off"
+                    - bootDevice:
+                        device: "disk"
+                        persistent: true
+                        efiBoot: true
+                    - powerAction: "on"
+              hardwareAffinity:
+                required:
+                  - labelSelector:
+                      matchLabels:
+                        tinkerbell.org/role: worker
+              templateOverride: |-
+                version: "0.1"
+                name: playground-template
+                global_timeout: 9000
+                tasks:
+                  - name: "playground-template"
+                    worker: "{{.device_1}}"
+                    volumes:
+                      - /dev:/dev
+                      - /dev/console:/dev/console
+                      - /lib/firmware:/lib/firmware:ro
+                    actions:
+                      - name: "Stream Ubuntu Image"
+                        image: quay.io/tinkerbell/actions/oci2disk:latest
+                        timeout: 3000
+                        environment:
+                          DEST_DISK: {{ index .Hardware.Disks 0 }}
+                          IMG_URL: ${schema.spec.image.registry}/${schema.spec.image.osDistro}-${schema.spec.image.osVersion}:${schema.spec.kubernetesVersion}.gz
+                          COMPRESSED: true
+                      - name: "Grow Partition"
+                        image: quay.io/tinkerbell/actions/cexec:latest
+                        timeout: 90
+                        environment:
+                          BLOCK_DEVICE: {{ index .Hardware.Disks 0 }}3
+                          FS_TYPE: ext4
+                          CHROOT: y
+                          DEFAULT_INTERPRETER: "/bin/sh -c"
+                          CMD_LINE: "growpart {{ index .Hardware.Disks 0 }} 3 && resize2fs {{ index .Hardware.Disks 0 }}3"
+                      - name: "Add Tink Cloud-Init Config"
+                        image: quay.io/tinkerbell/actions/writefile:latest
+                        timeout: 90
+                        environment:
+                          DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
+                          FS_TYPE: ext4
+                          DEST_PATH: /etc/cloud/cloud.cfg.d/10_tinkerbell.cfg
+                          UID: 0
+                          GID: 0
+                          MODE: 0600
+                          DIRMODE: 0700
+                          CONTENTS: |
+                            datasource:
+                              Ec2:
+                                metadata_urls: ["http://{{ (index .Hardware.Interfaces 0).DHCP.IP.Gateway }}:7172"]
+                                strict_id: false
+                            manage_etc_hosts: localhost
+                            warnings:
+                              dsid_missing_source: off
+                      - name: "Add Tink Cloud-Init DS-Identity"
+                        image: quay.io/tinkerbell/actions/writefile:latest
+                        timeout: 90
+                        environment:
+                          DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
+                          FS_TYPE: ext4
+                          DEST_PATH: /etc/cloud/ds-identify.cfg
+                          UID: 0
+                          GID: 0
+                          MODE: 0600
+                          DIRMODE: 0700
+                          CONTENTS: |
+                            datasource: Ec2
+                      - name: "Shutdown"
+                        image: ghcr.io/jacobweinstock/waitdaemon:latest
+                        timeout: 90
+                        pid: host
+                        command: ["shutdown"]
+                        environment:
+                          IMAGE: alpine
+                          WAIT_SECONDS: 10
+                        volumes:
+                          - /var/run/docker.sock:/var/run/docker.sock
+
+    # Worker KubeadmConfigTemplate
+    - id: workerConfigTemplate
+      template:
+        apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+        kind: KubeadmConfigTemplate
+        metadata:
+          name: ${schema.spec.name}-worker
+          namespace: ${schema.spec.namespace}
+        spec:
+          template:
+            spec:
+              joinConfiguration:
+                nodeRegistration:
+                  kubeletExtraArgs:
+                    - name: provider-id
+                      value: PROVIDER_ID
+              users:
+                - name: ${schema.spec.user.name}
+                  passwd: ${schema.spec.user.passwordHash}
+                  sshAuthorizedKeys: ${schema.spec.user.sshAuthorizedKeys}
+                  sudo: ALL=(ALL) NOPASSWD:ALL
+
+    # Worker MachineDeployment
+    - id: workerDeployment
+      template:
+        apiVersion: cluster.x-k8s.io/v1beta2
+        kind: MachineDeployment
+        metadata:
+          name: ${schema.spec.name}-worker
+          namespace: ${schema.spec.namespace}
+        spec:
+          clusterName: ${cluster.metadata.name}
+          replicas: ${schema.spec.workers.replicas}
+          selector:
+            matchLabels:
+              cluster.x-k8s.io/cluster-name: ${cluster.metadata.name}
+              pool: worker
+          template:
+            metadata:
+              labels:
+                cluster.x-k8s.io/cluster-name: ${cluster.metadata.name}
+                pool: worker
+            spec:
+              bootstrap:
+                configRef:
+                  apiGroup: bootstrap.cluster.x-k8s.io
+                  kind: KubeadmConfigTemplate
+                  name: ${workerConfigTemplate.metadata.name}
+              clusterName: ${cluster.metadata.name}
+              infrastructureRef:
+                apiGroup: infrastructure.cluster.x-k8s.io
+                kind: TinkerbellMachineTemplate
+                name: ${workerMachineTemplate.metadata.name}
+              version: ${schema.spec.kubernetesVersion}

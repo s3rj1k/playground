@@ -9,7 +9,6 @@ parameters:
   prefix:
     type: string
     description: "Resource name prefix"
-    default: s3rj1k
     label: "Resource name prefix"
     constraints:
       - length:

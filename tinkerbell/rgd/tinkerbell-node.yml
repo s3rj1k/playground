@@ -1,0 +1,111 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: tinkerbellnode.v1alpha1.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TinkerbellNode
+    spec:
+      name: string
+      namespace: string | default=capi-system
+      role: string
+      bmc:
+        secretName: string
+        host: string
+        insecureTLS: boolean | default=true
+        port: integer
+        redfish:
+          port: integer
+          useBasicAuth: boolean | default=true
+        ipmitool:
+          cipherSuite: string | default="3"
+      network:
+        ip: string
+        gateway: string
+        netmask: string | default=255.255.255.0
+        mac: string
+        nameServers: '[]string | default=["8.8.8.8","1.1.1.1"]'
+      arch: string | default=x86_64
+      uefi: boolean | default=true
+      disk:
+        device: string | default=/dev/vda
+      os:
+        distro: string | default=ubuntu
+        slug: string | default=ubuntu_24_04
+        version: string | default="24.04"
+    status:
+      machineName: ${bmcMachine.metadata.name}
+      hardwareName: ${hardware.metadata.name}
+  resources:
+    # BMC Machine
+    - id: bmcMachine
+      template:
+        apiVersion: bmc.tinkerbell.org/v1alpha1
+        kind: Machine
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          connection:
+            authSecretRef:
+              name: ${schema.spec.bmc.secretName}
+              namespace: ${schema.spec.namespace}
+            host: ${schema.spec.bmc.host}
+            insecureTLS: ${schema.spec.bmc.insecureTLS}
+            port: ${schema.spec.bmc.port}
+            providerOptions:
+              ipmitool:
+                cipherSuite: ${schema.spec.bmc.ipmitool.cipherSuite}
+                port: ${schema.spec.bmc.port}
+              preferredOrder:
+                - gofish
+                - ipmitool
+              redfish:
+                port: ${schema.spec.bmc.redfish.port}
+                systemName: ${schema.spec.name}
+                useBasicAuth: ${schema.spec.bmc.redfish.useBasicAuth}
+
+    # Hardware
+    - id: hardware
+      template:
+        apiVersion: tinkerbell.org/v1alpha1
+        kind: Hardware
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+          labels:
+            tinkerbell.org/role: ${schema.spec.role}
+        spec:
+          auto:
+            enrollmentEnabled: false
+          bmcRef:
+            apiGroup: bmc.tinkerbell.org
+            kind: Machine
+            name: ${bmcMachine.metadata.name}
+          disks:
+            - device: ${schema.spec.disk.device}
+          interfaces:
+            - dhcp:
+                arch: ${schema.spec.arch}
+                hostname: ${schema.spec.name}
+                ip:
+                  address: ${schema.spec.network.ip}
+                  gateway: ${schema.spec.network.gateway}
+                  netmask: ${schema.spec.network.netmask}
+                lease_time: 4294967294
+                mac: ${schema.spec.network.mac}
+                name_servers: ${schema.spec.network.nameServers}
+                uefi: ${schema.spec.uefi}
+              disableDhcp: false
+              netboot:
+                allowPXE: true
+                allowWorkflow: true
+          metadata:
+            instance:
+              hostname: ${schema.spec.name}
+              id: ${schema.spec.network.mac}
+              operating_system:
+                distro: ${schema.spec.os.distro}
+                os_slug: ${schema.spec.os.slug}
+                version: ${schema.spec.os.version}

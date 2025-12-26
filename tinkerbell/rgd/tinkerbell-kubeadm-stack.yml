@@ -1,0 +1,231 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: tinkerbellkubeadmstack.v1alpha1.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TinkerbellKubeadmStack
+    spec:
+      namespace: string | default=capi-system
+      tinkerbellIP: string
+      sourceInterface: string | default=virbr0
+      trustedProxies: string | default=10.244.0.0/16
+      versions:
+        clusterAPI: string | default=v1.11.3
+        addonHelm: string | default=v0.5.3
+        tinkerbellProvider: string | default=v0.6.8
+        tinkerbellChart: string | default=v0.22.0
+        kubeVip: string | default=v1.0.3
+        kubeVipCloudProvider: string | default=0.2.9
+      isoURL: string | default=https://github.com/tinkerbell/hook/releases/download/latest/hook-x86_64-efi-initrd.iso
+      rufioMetricsAddr: string | default=0.0.0.0:8085
+      tinkControllerMetricsAddr: string | default=0.0.0.0:8084
+      osiePort: integer | default=7171
+      kubevip:
+        enabled: boolean | default=true
+    status:
+      coreProviderReady: ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      addonProviderReady: ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      bootstrapProviderReady: ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      controlPlaneProviderReady: ${controlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      infrastructureProviderReady: ${infrastructureProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      tinkerbellReleaseReady: ${tinkerbellRelease.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      kubeVipReleaseReady: ${kubeVipRelease.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+  resources:
+    # Namespace
+    - id: capiNamespace
+      template:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ${schema.spec.namespace}
+
+    # Cluster API Core Provider
+    - id: coreProvider
+      readyWhen:
+        - ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: CoreProvider
+        metadata:
+          name: cluster-api
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          version: ${schema.spec.versions.clusterAPI}
+
+    # Addon Provider (Helm)
+    - id: addonProvider
+      readyWhen:
+        - ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: AddonProvider
+        metadata:
+          name: helm
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          version: ${schema.spec.versions.addonHelm}
+
+    # Bootstrap Provider (Kubeadm)
+    - id: bootstrapProvider
+      readyWhen:
+        - ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: BootstrapProvider
+        metadata:
+          name: kubeadm
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          manager:
+            featureGates:
+              KubeadmBootstrapFormatIgnition: true
+          version: ${schema.spec.versions.clusterAPI}
+
+    # Control Plane Provider (Kubeadm)
+    - id: controlPlaneProvider
+      readyWhen:
+        - ${controlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: ControlPlaneProvider
+        metadata:
+          name: kubeadm
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          version: ${schema.spec.versions.clusterAPI}
+
+    # Tinkerbell Config Secret
+    - id: tinkerbellSecret
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: tinkerbell-infrastructure-provider-config
+          namespace: ${capiNamespace.metadata.name}
+        type: Opaque
+        stringData:
+          TINKERBELL_IP: ${schema.spec.tinkerbellIP}
+
+    # Infrastructure Provider (Tinkerbell)
+    - id: infrastructureProvider
+      readyWhen:
+        - ${infrastructureProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: InfrastructureProvider
+        metadata:
+          name: tinkerbell
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          configSecret:
+            name: ${tinkerbellSecret.metadata.name}
+            namespace: ${capiNamespace.metadata.name}
+          fetchConfig:
+            url: https://github.com/tinkerbell/cluster-api-provider-tinkerbell/releases/${schema.spec.versions.tinkerbellProvider}/infrastructure-components.yaml
+          version: ${schema.spec.versions.tinkerbellProvider}
+
+    # Tinkerbell Helm Repository
+    - id: tinkerbellRepo
+      template:
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: tinkerbell
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          provider: generic
+          type: oci
+          url: oci://ghcr.io/tinkerbell/charts
+
+    # Tinkerbell Helm Release
+    - id: tinkerbellRelease
+      readyWhen:
+        - ${tinkerbellRelease.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: tinkerbell
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          interval: 10m
+          chart:
+            spec:
+              chart: tinkerbell
+              version: ${schema.spec.versions.tinkerbellChart}
+              reconcileStrategy: ChartVersion
+              sourceRef:
+                kind: HelmRepository
+                name: ${tinkerbellRepo.metadata.name}
+                namespace: ${capiNamespace.metadata.name}
+          values:
+            artifactsFileServer: http://${schema.spec.tinkerbellIP}:7173
+            publicIP: ${schema.spec.tinkerbellIP}
+            trustedProxies:
+              - ${schema.spec.trustedProxies}
+            deployment:
+              envs:
+                globals:
+                  logLevel: 3
+                rufio:
+                  metricsAddr: ${schema.spec.rufioMetricsAddr}
+                smee:
+                  ipxeHttpScriptBindAddr: ${schema.spec.tinkerbellIP}
+                  isoUpstreamURL: ${schema.spec.isoURL}
+                  osieURL: http://${schema.spec.tinkerbellIP}:${string(schema.spec.osiePort)}
+                  syslogBindAddr: ${schema.spec.tinkerbellIP}
+                  tftpServerBindAddr: ${schema.spec.tinkerbellIP}
+                tinkController:
+                  metricsAddr: ${schema.spec.tinkControllerMetricsAddr}
+                tinkServer:
+                  bindAddr: ${schema.spec.tinkerbellIP}
+                tootles:
+                  bindAddr: ${schema.spec.tinkerbellIP}
+              hostNetwork: true
+              init:
+                sourceInterface: ${schema.spec.sourceInterface}
+            optional:
+              hookos:
+                enabled: true
+              kubevip:
+                enabled: ${schema.spec.kubevip.enabled}
+                image: ghcr.io/kube-vip/kube-vip:${schema.spec.versions.kubeVip}
+
+    # Kube-VIP Helm Repository
+    - id: kubeVipRepo
+      includeWhen:
+        - ${schema.spec.kubevip.enabled}
+      template:
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: kube-vip
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          interval: 10m
+          url: https://kube-vip.github.io/helm-charts
+
+    # Kube-VIP Cloud Provider Helm Release
+    - id: kubeVipRelease
+      includeWhen:
+        - ${schema.spec.kubevip.enabled}
+      readyWhen:
+        - ${kubeVipRelease.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: kube-vip-cloud-provider
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          interval: 10m
+          chart:
+            spec:
+              chart: kube-vip-cloud-provider
+              version: ${schema.spec.versions.kubeVipCloudProvider}
+              sourceRef:
+                kind: HelmRepository
+                name: ${kubeVipRepo.metadata.name}
+                namespace: ${capiNamespace.metadata.name}
