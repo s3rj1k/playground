@@ -9,6 +9,7 @@
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "INSTALL_CERT_MANAGER=false" playbooks/lab.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "INSTALL_FLUX_CD=false" -e "INSTALL_KRO=false" playbooks/lab.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "KITE_HOSTNAMES=['kite.local','kite.example.com']" playbooks/lab.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "DISABLE_SERVICELB=true" playbooks/lab.yml
 
 ---
 - name: Set global variables
@@ -31,6 +32,7 @@
     KITE_HOSTNAMES:
       - "kite.local"
     KITE_TLS_PORT: 4271
+    DISABLE_SERVICELB: false
   tasks:
     - name: Set global facts
       set_fact:
@@ -48,6 +50,7 @@
         INSTALL_KITE: "{{ INSTALL_KITE }}"
         KITE_HOSTNAMES: "{{ KITE_HOSTNAMES }}"
         KITE_TLS_PORT: "{{ KITE_TLS_PORT }}"
+        DISABLE_SERVICELB: "{{ DISABLE_SERVICELB }}"
         cacheable: yes
 
 - name: Import base configuration playbook

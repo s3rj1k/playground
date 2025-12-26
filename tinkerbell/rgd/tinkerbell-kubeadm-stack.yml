@@ -18,12 +18,16 @@ spec:
         tinkerbellChart: string | default=v0.22.0
         kubeVip: string | default=v1.0.3
         kubeVipCloudProvider: string | default=0.2.9
+        hostedControlPlane: string | default=v1.5.0
       isoURL: string | default=https://github.com/tinkerbell/hook/releases/download/latest/hook-x86_64-efi-initrd.iso
       rufioMetricsAddr: string | default=0.0.0.0:8085
       tinkControllerMetricsAddr: string | default=0.0.0.0:8084
       osiePort: integer | default=7171
       kubevip:
         enabled: boolean | default=true
+        lbEnable: boolean | default=true
+      hostedControlPlane:
+        enabled: boolean | default=false
     status:
       coreProviderReady: ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       addonProviderReady: ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
@@ -32,6 +36,7 @@ spec:
       infrastructureProviderReady: ${infrastructureProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       tinkerbellReleaseReady: ${tinkerbellRelease.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       kubeVipReleaseReady: ${kubeVipRelease.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      hostedControlPlaneProviderReady: ${hostedControlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
   resources:
     # Namespace
     - id: capiNamespace
@@ -95,6 +100,23 @@ spec:
           namespace: ${capiNamespace.metadata.name}
         spec:
           version: ${schema.spec.versions.clusterAPI}
+
+    # Control Plane Provider (Hosted Control Plane)
+    - id: hostedControlPlaneProvider
+      includeWhen:
+        - ${schema.spec.hostedControlPlane.enabled}
+      readyWhen:
+        - ${hostedControlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: ControlPlaneProvider
+        metadata:
+          name: hosted-control-plane
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          fetchConfig:
+            url: https://github.com/teutonet/cluster-api-provider-hosted-control-plane/releases/${schema.spec.versions.hostedControlPlane}/control-plane-components.yaml
+          version: ${schema.spec.versions.hostedControlPlane}
 
     # Tinkerbell Config Secret
     - id: tinkerbellSecret
@@ -192,6 +214,9 @@ spec:
               kubevip:
                 enabled: ${schema.spec.kubevip.enabled}
                 image: ghcr.io/kube-vip/kube-vip:${schema.spec.versions.kubeVip}
+                additionalEnv:
+                  - name: lb_enable
+                    value: "${schema.spec.kubevip.lbEnable}"
 
     # Kube-VIP Helm Repository
     - id: kubeVipRepo

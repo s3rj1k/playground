@@ -1,18 +1,35 @@
+# WORKAROUND: HCP bug where konnectivity-agent connects to port 443 instead of 8132.
+# See: https://github.com/teutonet/cluster-api-provider-hosted-control-plane/pull/73
+#
+# Until PR #73 is merged, this RGD implements a routing workaround:
+# 1. hcpGatewayService: LoadBalancer that claims gateway.ip and routes to Traefik
+#    - Prevents HCP's s-<cluster> service from getting gateway.ip
+#    - All external traffic goes through Traefik instead of directly to HCP service
+# 2. Gateway listeners on ports 443, 6443, 8132 with TLS passthrough
+#    - Traffic on any port is routed by hostname via TLSRoutes
+# 3. TLSRoutes (created by HCP controller) route by hostname:
+#    - konnectivity.* on port 443 → s-<cluster>:8132 (fixes the bug)
+#    - <cluster>.* on port 443/6443 → s-<cluster>:443 (API server)
+#
+# Requires Traefik entrypoints: hcp (8132), hcpgw (443), hcplegacy (6443)
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
-  name: tinkerbellkubeadmcluster.v1alpha1.kro.run
+  name: tinkerbellkubeadmhostedcluster.v1alpha1.kro.run
 spec:
   schema:
     apiVersion: v1alpha1
-    kind: TinkerbellKubeadmCluster
+    kind: TinkerbellKubeadmHostedCluster
     spec:
       name: string
       namespace: string | default=capi-system
       kubernetesVersion: string | default=v1.34.3
-      controlPlaneEndpoint:
-        host: string
-        port: integer | default=6443
+      gateway:
+        name: string
+        namespace: string | default=capi-system
+        ip: string
+      kubevip:
+        ipRange: string
       network:
         podCIDR: string | default=192.168.0.0/16
         serviceCIDR: string | default=172.26.0.0/16
@@ -20,12 +37,12 @@ spec:
         replicas: integer | default=1
       workers:
         replicas: integer | default=1
+      konnectivityClient:
+        replicas: integer | default=1
       image:
         registry: string | default=ghcr.io/s3rj1k/playground
         osDistro: string | default=ubuntu
         osVersion: string | default="2404"
-      kubeVip:
-        version: string | default=v1.0.3
       user:
         name: string | default=tink
         passwordHash: string | default="!"
@@ -33,8 +50,118 @@ spec:
         sshAuthorizedKeys: "[]string | default=[]"
     status:
       clusterReady: ${cluster.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      controlPlaneReady: ${controlPlane.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      controlPlaneReady: ${hostedControlPlane.status.ready}
   resources:
+    # Gateway for HCP traffic
+    - id: gateway
+      template:
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: Gateway
+        metadata:
+          name: ${schema.spec.gateway.name}
+          namespace: ${schema.spec.gateway.namespace}
+        spec:
+          gatewayClassName: traefik
+          listeners:
+            - name: tls-passthrough
+              protocol: TLS
+              port: 8132
+              hostname: "*.${schema.spec.gateway.ip}.nip.io"
+              tls:
+                mode: Passthrough
+              allowedRoutes:
+                namespaces:
+                  from: Same
+                kinds:
+                  - kind: TLSRoute
+            # Workaround for HCP bug: konnectivity-agent uses apiServerServicePort (443)
+            # instead of konnectivityServicePort (8132). See PR:
+            # https://github.com/teutonet/cluster-api-provider-hosted-control-plane/pull/73
+            - name: tls-passthrough-443
+              protocol: TLS
+              port: 443
+              hostname: "*.${schema.spec.gateway.ip}.nip.io"
+              tls:
+                mode: Passthrough
+              allowedRoutes:
+                namespaces:
+                  from: Same
+                kinds:
+                  - kind: TLSRoute
+            - name: tls-passthrough-6443
+              protocol: TLS
+              port: 6443
+              hostname: "*.${schema.spec.gateway.ip}.nip.io"
+              tls:
+                mode: Passthrough
+              allowedRoutes:
+                namespaces:
+                  from: Same
+                kinds:
+                  - kind: TLSRoute
+
+    # LoadBalancer service to claim gateway IP and route to Traefik.
+    # This ensures traffic to gateway.ip goes through Traefik (for TLSRoute routing)
+    # instead of directly to the HCP service (s-<cluster-name>) which would bypass Gateway.
+    - id: hcpGatewayService
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: hcp-gateway-${schema.spec.name}
+          namespace: kube-system
+          annotations:
+            kube-vip.io/loadbalancerIPs: ${schema.spec.gateway.ip}
+        spec:
+          type: LoadBalancer
+          selector:
+            app.kubernetes.io/name: traefik
+          ports:
+            - name: hcp
+              port: 8132
+              targetPort: hcp
+            - name: hcpgw
+              port: 443
+              targetPort: hcpgw
+            - name: hcplegacy
+              port: 6443
+              targetPort: hcplegacy
+
+    # TLSRoute for legacy API server port (6443)
+    # HCP controller only creates TLSRoutes for ports 443 and 8132, but cilium uses 6443
+    - id: apiServerLegacyTLSRoute
+      template:
+        apiVersion: gateway.networking.k8s.io/v1alpha2
+        kind: TLSRoute
+        metadata:
+          name: ${schema.spec.name}-api-legacy
+          namespace: ${schema.spec.namespace}
+          labels:
+            cluster.x-k8s.io/cluster-name: ${schema.spec.name}
+        spec:
+          parentRefs:
+            - group: gateway.networking.k8s.io
+              kind: Gateway
+              name: ${schema.spec.gateway.name}
+              namespace: ${schema.spec.gateway.namespace}
+          hostnames:
+            - "${schema.spec.name}.${schema.spec.namespace}.${schema.spec.gateway.ip}.nip.io"
+          rules:
+            - backendRefs:
+                - name: s-${schema.spec.name}
+                  port: 443
+
+    # Kube-vip IP pool ConfigMap
+    - id: kubevipConfigMap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: kube-vip-cloud-provider
+          namespace: ${schema.spec.namespace}
+        data:
+          range-global: ${schema.spec.kubevip.ipRange}
+
     # Cluster
     - id: cluster
       template:
@@ -54,12 +181,9 @@ spec:
             services:
               cidrBlocks:
                 - ${schema.spec.network.serviceCIDR}
-          controlPlaneEndpoint:
-            host: ${schema.spec.controlPlaneEndpoint.host}
-            port: ${schema.spec.controlPlaneEndpoint.port}
           controlPlaneRef:
             apiGroup: controlplane.cluster.x-k8s.io
-            kind: KubeadmControlPlane
+            kind: HostedControlPlane
             name: ${schema.spec.name}-control-plane
           infrastructureRef:
             apiGroup: infrastructure.cluster.x-k8s.io
@@ -75,13 +199,33 @@ spec:
           name: ${schema.spec.name}
           namespace: ${schema.spec.namespace}
         spec:
-          controlPlaneEndpoint:
-            host: ${schema.spec.controlPlaneEndpoint.host}
-            port: ${schema.spec.controlPlaneEndpoint.port}
           imageLookupBaseRegistry: ${schema.spec.image.registry}
           imageLookupFormat: "{{.BaseRegistry}}/{{.OSDistro}}-{{.OSVersion}}:{{.KubernetesVersion}}.gz"
           imageLookupOSDistro: ${schema.spec.image.osDistro}
           imageLookupOSVersion: ${schema.spec.image.osVersion}
+
+    # HostedControlPlane
+    - id: hostedControlPlane
+      template:
+        apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+        kind: HostedControlPlane
+        metadata:
+          name: ${schema.spec.name}-control-plane
+          namespace: ${schema.spec.namespace}
+        spec:
+          version: ${schema.spec.kubernetesVersion}
+          replicas: ${schema.spec.controlPlane.replicas}
+          gateway:
+            namespace: ${schema.spec.gateway.namespace}
+            name: ${schema.spec.gateway.name}
+          deployment:
+            controllerManager:
+              args:
+                allocate-node-cidrs: "true"
+          konnectivityClient:
+            replicas: ${schema.spec.konnectivityClient.replicas}
+          kubeProxy: {}
+          coredns: {}
 
     # Cilium HelmChartProxy
     - id: ciliumAddon
@@ -102,8 +246,8 @@ spec:
           valuesTemplate: |
             ipam:
               mode: kubernetes
-            k8sServiceHost: {{ .Cluster.spec.controlPlaneEndpoint.host }}
-            k8sServicePort: {{ .Cluster.spec.controlPlaneEndpoint.port }}
+            k8sServiceHost: ${schema.spec.name}.${schema.spec.namespace}.${schema.spec.gateway.ip}.nip.io
+            k8sServicePort: 6443
             tolerations:
               - key: node-role.kubernetes.io/control-plane
                 operator: Exists
@@ -115,6 +259,7 @@ spec:
                 operator: Exists
                 effect: NoSchedule
             operator:
+              replicas: ${string(schema.spec.workers.replicas)}
               tolerations:
                 - key: node-role.kubernetes.io/control-plane
                   operator: Exists
@@ -136,163 +281,6 @@ spec:
                 - key: node.kubernetes.io/not-ready
                   operator: Exists
                   effect: NoSchedule
-
-    # KubeadmControlPlane
-    - id: controlPlane
-      template:
-        apiVersion: controlplane.cluster.x-k8s.io/v1beta2
-        kind: KubeadmControlPlane
-        metadata:
-          name: ${schema.spec.name}-control-plane
-          namespace: ${schema.spec.namespace}
-        spec:
-          kubeadmConfigSpec:
-            initConfiguration:
-              nodeRegistration:
-                kubeletExtraArgs:
-                  - name: provider-id
-                    value: PROVIDER_ID
-            joinConfiguration:
-              nodeRegistration:
-                ignorePreflightErrors:
-                  - DirAvailable--etc-kubernetes-manifests
-                kubeletExtraArgs:
-                  - name: provider-id
-                    value: PROVIDER_ID
-            preKubeadmCommands:
-              - |-
-                mkdir -p /etc/kubernetes/manifests
-                ctr images pull ghcr.io/kube-vip/kube-vip:${schema.spec.kubeVip.version}
-
-                DEFAULT_INTERFACE=$(ip -4 -j route list default | jq -r .[0].dev)
-
-                ctr run --rm --net-host \
-                  ghcr.io/kube-vip/kube-vip:${schema.spec.kubeVip.version} vip \
-                  /kube-vip manifest pod \
-                  --arp \
-                  --interface "" \
-                  --address "${schema.spec.controlPlaneEndpoint.host}" \
-                  --controlplane \
-                  --leaderElection \
-                  --k8sConfigPath /etc/kubernetes/super-admin.conf \
-                  > /etc/kubernetes/manifests/kube-vip.yaml
-            users:
-              - name: ${schema.spec.user.name}
-                passwd: ${schema.spec.user.passwordHash}
-                lockPassword: ${schema.spec.user.lockPassword}
-                sshAuthorizedKeys: ${schema.spec.user.sshAuthorizedKeys}
-                sudo: ALL=(ALL) NOPASSWD:ALL
-          machineTemplate:
-            spec:
-              infrastructureRef:
-                apiGroup: infrastructure.cluster.x-k8s.io
-                kind: TinkerbellMachineTemplate
-                name: ${schema.spec.name}-control-plane
-          replicas: ${schema.spec.controlPlane.replicas}
-          version: ${schema.spec.kubernetesVersion}
-
-    # Control Plane TinkerbellMachineTemplate
-    - id: controlPlaneMachineTemplate
-      template:
-        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-        kind: TinkerbellMachineTemplate
-        metadata:
-          name: ${schema.spec.name}-control-plane
-          namespace: ${schema.spec.namespace}
-        spec:
-          template:
-            spec:
-              bootOptions:
-                bootMode: customboot
-                custombootConfig:
-                  preparingActions:
-                    - powerAction: "off"
-                    - bootDevice:
-                        device: "pxe"
-                        efiBoot: true
-                    - powerAction: "on"
-                  postActions:
-                    - powerAction: "off"
-                    - bootDevice:
-                        device: "disk"
-                        persistent: true
-                        efiBoot: true
-                    - powerAction: "on"
-              hardwareAffinity:
-                required:
-                  - labelSelector:
-                      matchLabels:
-                        tinkerbell.org/role: control-plane
-              templateOverride: |-
-                version: "0.1"
-                name: control-plane
-                global_timeout: 9000
-                tasks:
-                  - name: "control-plane"
-                    worker: "{{.device_1}}"
-                    volumes:
-                      - /dev:/dev
-                      - /dev/console:/dev/console
-                      - /lib/firmware:/lib/firmware:ro
-                    actions:
-                      - name: "Stream Ubuntu Image"
-                        image: quay.io/tinkerbell/actions/oci2disk:latest
-                        timeout: 3000
-                        environment:
-                          DEST_DISK: {{ index .Hardware.Disks 0 }}
-                          IMG_URL: ${schema.spec.image.registry}/${schema.spec.image.osDistro}-${schema.spec.image.osVersion}:${schema.spec.kubernetesVersion}.gz
-                          COMPRESSED: true
-                      - name: "Grow Partition"
-                        image: quay.io/tinkerbell/actions/cexec:latest
-                        timeout: 90
-                        environment:
-                          BLOCK_DEVICE: {{ index .Hardware.Disks 0 }}3
-                          FS_TYPE: ext4
-                          CHROOT: y
-                          DEFAULT_INTERPRETER: "/bin/sh -c"
-                          CMD_LINE: "growpart {{ index .Hardware.Disks 0 }} 3 && resize2fs {{ index .Hardware.Disks 0 }}3"
-                      - name: "Add Tink Cloud-Init Config"
-                        image: quay.io/tinkerbell/actions/writefile:latest
-                        timeout: 90
-                        environment:
-                          DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
-                          FS_TYPE: ext4
-                          DEST_PATH: /etc/cloud/cloud.cfg.d/10_tinkerbell.cfg
-                          UID: 0
-                          GID: 0
-                          MODE: 0600
-                          DIRMODE: 0700
-                          CONTENTS: |
-                            datasource:
-                              Ec2:
-                                metadata_urls: ["http://{{ (index .Hardware.Interfaces 0).DHCP.IP.Gateway }}:7172"]
-                                strict_id: false
-                            manage_etc_hosts: localhost
-                            warnings:
-                              dsid_missing_source: off
-                      - name: "Add Tink Cloud-Init DS-Identity"
-                        image: quay.io/tinkerbell/actions/writefile:latest
-                        timeout: 90
-                        environment:
-                          DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
-                          FS_TYPE: ext4
-                          DEST_PATH: /etc/cloud/ds-identify.cfg
-                          UID: 0
-                          GID: 0
-                          MODE: 0600
-                          DIRMODE: 0700
-                          CONTENTS: |
-                            datasource: Ec2
-                      - name: "Shutdown"
-                        image: ghcr.io/jacobweinstock/waitdaemon:latest
-                        timeout: 90
-                        pid: host
-                        command: ["shutdown"]
-                        environment:
-                          IMAGE: alpine
-                          WAIT_SECONDS: 10
-                        volumes:
-                          - /var/run/docker.sock:/var/run/docker.sock
 
     # Worker TinkerbellMachineTemplate
     - id: workerMachineTemplate

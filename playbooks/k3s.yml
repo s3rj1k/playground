@@ -6,6 +6,7 @@
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "CLUSTER_CIDR=10.42.0.0/16" playbooks/k3s.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "REGISTRY_MIRROR=https://registry.example.com:5000" playbooks/k3s.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "KITE_HOSTNAMES=['kite.local','kite.example.com']" playbooks/k3s.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "DISABLE_SERVICELB=true" playbooks/k3s.yml
 
 ---
 - name: Kubernetes (k3s)
@@ -19,6 +20,7 @@
     CLUSTER_CIDR: "172.20.0.0/16"
     SERVICE_CIDR: "172.21.0.0/16"
     K3S_EXTRA_FLAGS: ""
+    DISABLE_SERVICELB: false
     REGISTRY_MIRROR: ""
     INSTALL_CERT_MANAGER: true
     INSTALL_FLUX_CD: true
@@ -101,7 +103,31 @@
             mode: "0644"
           when: INSTALL_CERT_MANAGER | bool
 
-        - name: Configure Traefik with custom TLS-only entrypoint for Kite
+        - name: Get latest Gateway API release version
+          uri:
+            url: https://api.github.com/repos/kubernetes-sigs/gateway-api/releases/latest
+            return_content: yes
+          register: gateway_api_release
+
+        - name: Install experimental Gateway API TLSRoute CRD
+          get_url:
+            url: "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/{{ gateway_api_release.json.tag_name }}/config/crd/experimental/gateway.networking.k8s.io_tlsroutes.yaml"
+            dest: /var/lib/rancher/k3s/server/manifests/gateway-tlsroute-crd.yaml
+            mode: "0644"
+
+        - name: Install experimental Gateway API TCPRoute CRD
+          get_url:
+            url: "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/{{ gateway_api_release.json.tag_name }}/config/crd/experimental/gateway.networking.k8s.io_tcproutes.yaml"
+            dest: /var/lib/rancher/k3s/server/manifests/gateway-tcproute-crd.yaml
+            mode: "0644"
+
+        - name: Install experimental Gateway API BackendTLSPolicy CRD
+          get_url:
+            url: "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/{{ gateway_api_release.json.tag_name }}/config/crd/experimental/gateway.networking.k8s.io_backendtlspolicies.yaml"
+            dest: /var/lib/rancher/k3s/server/manifests/gateway-backendtlspolicy-crd.yaml
+            mode: "0644"
+
+        - name: Configure Traefik with Gateway API and custom entrypoints
           copy:
             dest: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
             content: |
@@ -112,17 +138,53 @@
                 namespace: kube-system
               spec:
                 valuesContent: |
+                  providers:
+                    kubernetesGateway:
+                      enabled: true
+                      experimentalChannel: true
+                  gateway:
+                    enabled: true
                   ports:
+                    web:
+                      expose:
+                        default: false
+                    websecure:
+                      expose:
+                        default: false
+              {% if DISABLE_SERVICELB | bool %}
+                    hcp:
+                      port: 8132
+                      expose:
+                        default: true
+                      exposedPort: 8132
+                      protocol: TCP
+                    hcpgw:
+                      port: 443
+                      expose:
+                        default: true
+                      exposedPort: 443
+                      protocol: TCP
+                    hcplegacy:
+                      port: 6443
+                      expose:
+                        default: true
+                      exposedPort: 6443
+                      protocol: TCP
+              {% endif %}
+              {% if INSTALL_KITE | bool %}
                     kite:
                       port: {{ KITE_TLS_PORT }}
                       expose:
                         default: true
                       exposedPort: {{ KITE_TLS_PORT }}
+              {% if DISABLE_SERVICELB | bool %}
+                      hostPort: {{ KITE_TLS_PORT }}
+              {% endif %}
                       protocol: TCP
                       tls:
                         enabled: true
+              {% endif %}
             mode: "0644"
-          when: INSTALL_KITE | bool
 
         - name: Download Flux CD manifest
           get_url:
@@ -195,6 +257,7 @@
                 valuesContent: |
                   service:
                     port: {{ KITE_TLS_PORT }}
+                    targetPort: {{ KITE_TLS_PORT }}
                   extraEnvs:
                     - name: PORT
                       value: "{{ KITE_TLS_PORT }}"
@@ -236,7 +299,6 @@
             content: |
               Kite Dashboard Credentials
               ==========================
-              URL:      https://<IP>:{{ KITE_TLS_PORT }}/
               {% for hostname in KITE_HOSTNAMES %}
               URL:      https://{{ hostname }}:{{ KITE_TLS_PORT }}/
               {% endfor %}
@@ -258,6 +320,7 @@
             /tmp/k3s-install.sh server --cluster-init \
               --cluster-cidr={{ CLUSTER_CIDR }} \
               --service-cidr={{ SERVICE_CIDR }} \
+              {{ '--disable=servicelb' if DISABLE_SERVICELB | bool else '' }} \
               {{ K3S_EXTRA_FLAGS }}
           args:
             executable: /bin/bash
@@ -271,6 +334,7 @@
             /tmp/k3s-install.sh server --cluster-init \
               --cluster-cidr={{ CLUSTER_CIDR }} \
               --service-cidr={{ SERVICE_CIDR }} \
+              {{ '--disable=servicelb' if DISABLE_SERVICELB | bool else '' }} \
               {{ K3S_EXTRA_FLAGS }}
           args:
             executable: /bin/bash
