@@ -72,6 +72,12 @@ parameters:
     label: "Install Kite"
     default: true
 
+  disable_servicelb:
+    type: boolean
+    description: "Disable K3s built-in ServiceLB. Must be disabled when using kube-vip as LoadBalancer."
+    label: "Disable ServiceLB"
+    default: true
+
   image_id:
     type: string
     description: "Image to use for the instances."
@@ -293,6 +299,7 @@ resources:
                   -e "INSTALL_KRO=%install_kro%" \
                   -e "INSTALL_K3K=%install_k3k%" \
                   -e "INSTALL_KITE=%install_kite%" \
+                  -e "DISABLE_SERVICELB=%disable_servicelb%" \
                   $KITE_EXTRA_ARGS
                 ANSIBLE_RESULT=$?
 
@@ -325,6 +332,8 @@ resources:
               get_param: install_k3k
             "%install_kite%":
               get_param: install_kite
+            "%disable_servicelb%":
+              get_param: disable_servicelb
             "%floating_ip%":
               get_attr:
                 - floating_ip_vm_1
