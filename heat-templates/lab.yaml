@@ -66,6 +66,12 @@ parameters:
     label: "Install k3k"
     default: true
 
+  install_kite:
+    type: boolean
+    description: "Install Kite Kubernetes dashboard"
+    label: "Install Kite"
+    default: true
+
   image_id:
     type: string
     description: "Image to use for the instances."
@@ -133,6 +139,10 @@ parameters:
     description: "Size of root volume in GB"
     default: 200
     label: "Volume Size"
+
+conditions:
+  kite_enabled:
+    get_param: install_kite
 
 resources:
   ssh_authorized_keys:
@@ -266,6 +276,11 @@ resources:
               - |
                 apt-get update && apt-get install -y ansible git || true
 
+                KITE_EXTRA_ARGS=""
+                if [ "%install_kite%" = "True" ]; then
+                  KITE_EXTRA_ARGS='-e {"KITE_HOSTNAMES":["%floating_ip%.nip.io"]}'
+                fi
+
                 ansible-pull -U "https://github.com/s3rj1k/playground.git" \
                   playbooks/lab.yml \
                   -v \
@@ -276,7 +291,9 @@ resources:
                   -e "INSTALL_FLUX_CD=%install_flux_cd%" \
                   -e "INSTALL_CLUSTER_API_OPERATOR=%install_cluster_api_operator%" \
                   -e "INSTALL_KRO=%install_kro%" \
-                  -e "INSTALL_K3K=%install_k3k%"
+                  -e "INSTALL_K3K=%install_k3k%" \
+                  -e "INSTALL_KITE=%install_kite%" \
+                  $KITE_EXTRA_ARGS
                 ANSIBLE_RESULT=$?
 
                 if [ $ANSIBLE_RESULT -eq 0 ]; then
@@ -306,6 +323,12 @@ resources:
               get_param: install_kro
             "%install_k3k%":
               get_param: install_k3k
+            "%install_kite%":
+              get_param: install_kite
+            "%floating_ip%":
+              get_attr:
+                - floating_ip_vm_1
+                - floating_ip_address
             "%wc_notify%":
               get_attr:
                 - vm_wait_handle
@@ -348,6 +371,18 @@ outputs:
       get_attr:
         - floating_ip_vm_1
         - floating_ip_address
+
+  kite_url:
+    description: Kite dashboard URL
+    condition: kite_enabled
+    value:
+      str_replace:
+        template: "https://$floating_ip.nip.io:4271/"
+        params:
+          $floating_ip:
+            get_attr:
+              - floating_ip_vm_1
+              - floating_ip_address
 
   vm_user_data:
     description: Rendered VM user-data

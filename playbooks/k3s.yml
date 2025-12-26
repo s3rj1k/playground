@@ -5,6 +5,7 @@
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "K3S_TOKEN=mytoken" playbooks/k3s.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "CLUSTER_CIDR=10.42.0.0/16" playbooks/k3s.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "REGISTRY_MIRROR=https://registry.example.com:5000" playbooks/k3s.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "KITE_HOSTNAMES=['kite.local','kite.example.com']" playbooks/k3s.yml
 
 ---
 - name: Kubernetes (k3s)
@@ -24,6 +25,10 @@
     INSTALL_CLUSTER_API_OPERATOR: true
     INSTALL_KRO: true
     INSTALL_K3K: true
+    INSTALL_KITE: true
+    KITE_HOSTNAMES:
+      - "kite.local"
+    KITE_TLS_PORT: 4271
 
   pre_tasks:
     - name: Wait for system to be ready
@@ -83,6 +88,42 @@
             mode: "0644"
           when: INSTALL_CERT_MANAGER | bool
 
+        - name: Create self-signed ClusterIssuer for cert-manager
+          copy:
+            dest: /var/lib/rancher/k3s/server/manifests/cert-manager-selfsigned-issuer.yaml
+            content: |
+              apiVersion: cert-manager.io/v1
+              kind: ClusterIssuer
+              metadata:
+                name: selfsigned-issuer
+              spec:
+                selfSigned: {}
+            mode: "0644"
+          when: INSTALL_CERT_MANAGER | bool
+
+        - name: Configure Traefik with custom TLS-only entrypoint for Kite
+          copy:
+            dest: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+            content: |
+              apiVersion: helm.cattle.io/v1
+              kind: HelmChartConfig
+              metadata:
+                name: traefik
+                namespace: kube-system
+              spec:
+                valuesContent: |
+                  ports:
+                    kite:
+                      port: {{ KITE_TLS_PORT }}
+                      expose:
+                        default: true
+                      exposedPort: {{ KITE_TLS_PORT }}
+                      protocol: TCP
+                      tls:
+                        enabled: true
+            mode: "0644"
+          when: INSTALL_KITE | bool
+
         - name: Download Flux CD manifest
           get_url:
             url: https://github.com/fluxcd/flux2/releases/latest/download/install.yaml
@@ -131,6 +172,78 @@
                 valuesContent: ""
             mode: "0644"
           when: INSTALL_K3K | bool
+
+        - name: Generate kite admin password
+          set_fact:
+            kite_admin_password: "{{ lookup('password', '/dev/null length=16 chars=ascii_letters,digits') }}"
+          when: INSTALL_KITE | bool
+
+        - name: Create kite HelmChart manifest for k3s auto-deploy
+          copy:
+            dest: /var/lib/rancher/k3s/server/manifests/kite-helmchart.yaml
+            content: |
+              apiVersion: helm.cattle.io/v1
+              kind: HelmChart
+              metadata:
+                name: kite
+                namespace: kube-system
+              spec:
+                chart: kite
+                repo: https://zxh326.github.io/kite
+                targetNamespace: kite-system
+                createNamespace: true
+                valuesContent: |
+                  service:
+                    port: {{ KITE_TLS_PORT }}
+                  extraEnvs:
+                    - name: PORT
+                      value: "{{ KITE_TLS_PORT }}"
+                    - name: ENABLE_ANALYTICS
+                      value: "false"
+                  superUser:
+                    create: true
+                    username: "admin"
+                    password: "{{ kite_admin_password }}"
+                  ingress:
+                    enabled: true
+                    className: "traefik"
+                    annotations:
+                      cert-manager.io/cluster-issuer: "selfsigned-issuer"
+                      traefik.ingress.kubernetes.io/router.entrypoints: "kite"
+                      traefik.ingress.kubernetes.io/router.tls: "true"
+                    hosts:
+                      - paths:
+                          - path: /
+                            pathType: Prefix
+              {% for hostname in KITE_HOSTNAMES %}
+                      - host: "{{ hostname }}"
+                        paths:
+                          - path: /
+                            pathType: Prefix
+              {% endfor %}
+                    tls:
+                      - secretName: kite-tls
+                        hosts:
+              {% for hostname in KITE_HOSTNAMES %}
+                          - "{{ hostname }}"
+              {% endfor %}
+            mode: "0644"
+          when: INSTALL_KITE | bool
+
+        - name: Save kite credentials to file
+          copy:
+            dest: /root/.kite-credentials
+            content: |
+              Kite Dashboard Credentials
+              ==========================
+              URL:      https://<IP>:{{ KITE_TLS_PORT }}/
+              {% for hostname in KITE_HOSTNAMES %}
+              URL:      https://{{ hostname }}:{{ KITE_TLS_PORT }}/
+              {% endfor %}
+              Username: admin
+              Password: {{ kite_admin_password }}
+            mode: "0600"
+          when: INSTALL_KITE | bool
 
     - name: Install k3s
       block:

@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/zot.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "ZOT_LISTEN_ADDRESS=127.0.0.1" playbooks/zot.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "ZOT_TLS_ENABLED=false" playbooks/zot.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "ZOT_PORT=5000" playbooks/zot.yml
 
 ---
 - name: Image Registry (zot) on Debian/Ubuntu AMD64
@@ -10,6 +13,10 @@
   become: true
   gather_facts: true
   ignore_errors: false
+  vars:
+    ZOT_LISTEN_ADDRESS: "0.0.0.0"
+    ZOT_PORT: "4269"
+    ZOT_TLS_ENABLED: true
 
   pre_tasks:
     - name: Check if system is supported
@@ -76,43 +83,46 @@
             owner: root
             group: root
 
-        - name: Create TLS certificate directory
-          file:
-            path: /etc/zot/certs
-            state: directory
-            mode: "0750"
-            owner: root
-            group: root
+        - name: Configure TLS certificates
+          block:
+            - name: Create TLS certificate directory
+              file:
+                path: /etc/zot/certs
+                state: directory
+                mode: "0750"
+                owner: root
+                group: root
 
-        - name: Generate private key for TLS
-          openssl_privatekey:
-            path: /etc/zot/certs/zot.key
-            size: 2048
-            mode: "0600"
-            owner: root
-            group: root
+            - name: Generate private key for TLS
+              openssl_privatekey:
+                path: /etc/zot/certs/zot.key
+                size: 2048
+                mode: "0600"
+                owner: root
+                group: root
 
-        - name: Generate certificate signing request
-          openssl_csr:
-            path: /etc/zot/certs/zot.csr
-            privatekey_path: /etc/zot/certs/zot.key
-            common_name: "{{ ansible_default_ipv4.address }}"
-            subject_alt_name:
-              - "IP:{{ ansible_default_ipv4.address }}"
-              - "DNS:{{ ansible_hostname }}"
-              - "DNS:localhost"
-              - "IP:127.0.0.1"
+            - name: Generate certificate signing request
+              openssl_csr:
+                path: /etc/zot/certs/zot.csr
+                privatekey_path: /etc/zot/certs/zot.key
+                common_name: "{{ ansible_default_ipv4.address }}"
+                subject_alt_name:
+                  - "IP:{{ ansible_default_ipv4.address }}"
+                  - "DNS:{{ ansible_hostname }}"
+                  - "DNS:localhost"
+                  - "IP:127.0.0.1"
 
-        - name: Generate self-signed certificate
-          openssl_certificate:
-            path: /etc/zot/certs/zot.crt
-            privatekey_path: /etc/zot/certs/zot.key
-            csr_path: /etc/zot/certs/zot.csr
-            provider: selfsigned
-            selfsigned_not_after: "+365d"
-            mode: "0644"
-            owner: root
-            group: root
+            - name: Generate self-signed certificate
+              openssl_certificate:
+                path: /etc/zot/certs/zot.crt
+                privatekey_path: /etc/zot/certs/zot.key
+                csr_path: /etc/zot/certs/zot.csr
+                provider: selfsigned
+                selfsigned_not_after: "+365d"
+                mode: "0644"
+                owner: root
+                group: root
+          when: ZOT_TLS_ENABLED | bool
 
         - name: Create Zot systemd service
           copy:
@@ -151,14 +161,13 @@
 
         - name: Save Zot credentials to /root
           copy:
-            dest: /root/zot-credentials.txt
+            dest: /root/.zot-credentials
             content: |
               Zot Registry Credentials
-              =======================
+              ========================
+              URL:      {{ 'https' if ZOT_TLS_ENABLED | bool else 'http' }}://{{ ansible_default_ipv4.address }}:{{ ZOT_PORT }}
               Username: admin
               Password: {{ zot_password }}
-
-              Registry URL: https://{{ ansible_default_ipv4.address }}:8043
             mode: "0600"
             owner: root
             group: root
@@ -174,7 +183,7 @@
             owner: root
             group: root
 
-        - name: Configure Zot with HTTPS and anonymous reads
+        - name: Configure Zot with TLS
           copy:
             dest: /etc/zot/config.json
             content: |
@@ -186,8 +195,8 @@
                   "dedupe": true
                 },
                 "http": {
-                  "address": "0.0.0.0",
-                  "port": "8043",
+                  "address": "{{ ZOT_LISTEN_ADDRESS }}",
+                  "port": "{{ ZOT_PORT }}",
                   "tls": {
                     "cert": "/etc/zot/certs/zot.crt",
                     "key": "/etc/zot/certs/zot.key"
@@ -228,6 +237,59 @@
             owner: root
             group: root
           notify: Restart zot
+          when: ZOT_TLS_ENABLED | bool
+
+        - name: Configure Zot without TLS
+          copy:
+            dest: /etc/zot/config.json
+            content: |
+              {
+                "distSpecVersion": "1.1.1",
+                "storage": {
+                  "rootDirectory": "/var/run/zot",
+                  "gc": true,
+                  "dedupe": true
+                },
+                "http": {
+                  "address": "{{ ZOT_LISTEN_ADDRESS }}",
+                  "port": "{{ ZOT_PORT }}",
+                  "auth": {
+                    "htpasswd": {
+                      "path": "/etc/zot/htpasswd"
+                    }
+                  },
+                  "accessControl": {
+                    "repositories": {
+                      "**": {
+                        "anonymousPolicy": ["read"]
+                      }
+                    }
+                  }
+                },
+                "extensions": {
+                  "search": {
+                    "enable": true,
+                    "cve": {
+                      "updateInterval": "24h"
+                    }
+                  },
+                  "scrub": {
+                    "enable": true,
+                    "interval": "72h"
+                  },
+                  "ui": {
+                    "enable": true
+                  }
+                },
+                "log": {
+                  "level": "info"
+                }
+              }
+            mode: "0644"
+            owner: root
+            group: root
+          notify: Restart zot
+          when: not (ZOT_TLS_ENABLED | bool)
 
         - name: Enable Zot service
           systemd:
