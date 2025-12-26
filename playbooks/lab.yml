@@ -4,6 +4,10 @@
 # Entrypoint playbook to configure a complete lab environment
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/lab.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "REGISTRY_MIRROR=https://registry.example.com:5000" playbooks/lab.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "INSTALL_LIBVIRT=false" playbooks/lab.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "INSTALL_ZOT=false" playbooks/lab.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "INSTALL_CERT_MANAGER=false" playbooks/lab.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "INSTALL_FLUX_CD=false" -e "INSTALL_KRO=false" playbooks/lab.yml
 
 ---
 - name: Set global variables
@@ -12,10 +16,24 @@
   gather_facts: false
   vars:
     REGISTRY_MIRROR: ""
+    INSTALL_LIBVIRT: true
+    INSTALL_ZOT: true
+    INSTALL_CERT_MANAGER: true
+    INSTALL_FLUX_CD: true
+    INSTALL_CLUSTER_API_OPERATOR: true
+    INSTALL_KRO: true
+    INSTALL_K3K: true
   tasks:
     - name: Set global facts
       set_fact:
         REGISTRY_MIRROR: "{{ REGISTRY_MIRROR }}"
+        INSTALL_LIBVIRT: "{{ INSTALL_LIBVIRT }}"
+        INSTALL_ZOT: "{{ INSTALL_ZOT }}"
+        INSTALL_CERT_MANAGER: "{{ INSTALL_CERT_MANAGER }}"
+        INSTALL_FLUX_CD: "{{ INSTALL_FLUX_CD }}"
+        INSTALL_CLUSTER_API_OPERATOR: "{{ INSTALL_CLUSTER_API_OPERATOR }}"
+        INSTALL_KRO: "{{ INSTALL_KRO }}"
+        INSTALL_K3K: "{{ INSTALL_K3K }}"
         cacheable: yes
 
 - name: Import base configuration playbook
@@ -23,12 +41,14 @@
 
 - name: Import libvirt configuration playbook
   import_playbook: libvirt.yml
+  when: INSTALL_LIBVIRT | bool
 
 - name: Import tools installation playbook
   import_playbook: tools.yml
 
 - name: Import zot registry playbook
   import_playbook: zot.yml
+  when: INSTALL_ZOT | bool
 
 - name: Import k3s Kubernetes playbook
   import_playbook: k3s.yml

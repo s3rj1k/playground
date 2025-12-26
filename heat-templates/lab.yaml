@@ -9,7 +9,6 @@ parameters:
   prefix:
     type: string
     description: "Resource name prefix"
-    default: s3rj1k
     label: "Resource name prefix"
     constraints:
       - length:
@@ -24,6 +23,48 @@ parameters:
     description: "Image registry mirror URL"
     label: "Image Registry Mirror"
     default: ""
+
+  install_libvirt:
+    type: boolean
+    description: "Install libvirt and related tools"
+    label: "Install Libvirt"
+    default: true
+
+  install_zot:
+    type: boolean
+    description: "Install Zot container registry"
+    label: "Install Zot Registry"
+    default: true
+
+  install_cert_manager:
+    type: boolean
+    description: "Install cert-manager for certificate management"
+    label: "Install cert-manager"
+    default: true
+
+  install_flux_cd:
+    type: boolean
+    description: "Install Flux CD for GitOps"
+    label: "Install Flux CD"
+    default: true
+
+  install_cluster_api_operator:
+    type: boolean
+    description: "Install Cluster API Operator"
+    label: "Install Cluster API Operator"
+    default: true
+
+  install_kro:
+    type: boolean
+    description: "Install kro (Kubernetes Resource Orchestrator)"
+    label: "Install kro"
+    default: true
+
+  install_k3k:
+    type: boolean
+    description: "Install k3k (Kubernetes-in-Kubernetes)"
+    label: "Install k3k"
+    default: true
 
   image_id:
     type: string
@@ -74,18 +115,6 @@ parameters:
     description: "First IP address for VM"
     default: "10.42.71.101"
     label: "VM IP 1"
-
-  # vm_ip_2:
-  #   type: string
-  #   description: "Second IP address for VM"
-  #   default: "10.42.71.102"
-  #   label: "VM IP 2"
-
-  # vm_ip_3:
-  #   type: string
-  #   description: "Third IP address for VM"
-  #   default: "10.42.71.103"
-  #   label: "VM IP 3"
 
   availability_zone:
     type: string
@@ -188,44 +217,6 @@ resources:
           ip_address:
             get_param: vm_ip_1
 
-  # port_vm_2:
-  #   type: "OS::Neutron::Port"
-  #   properties:
-  #     name:
-  #       str_replace:
-  #         template: $prefix-port-vm-2
-  #         params:
-  #           $prefix:
-  #             get_param: prefix
-  #     network:
-  #       get_resource: network
-  #     admin_state_up: true
-  #     port_security_enabled: false
-  #     fixed_ips:
-  #       - subnet:
-  #           get_resource: subnet
-  #         ip_address:
-  #           get_param: vm_ip_2
-
-  # port_vm_3:
-  #   type: "OS::Neutron::Port"
-  #   properties:
-  #     name:
-  #       str_replace:
-  #         template: $prefix-port-vm-3
-  #         params:
-  #           $prefix:
-  #             get_param: prefix
-  #     network:
-  #       get_resource: network
-  #     admin_state_up: true
-  #     port_security_enabled: false
-  #     fixed_ips:
-  #       - subnet:
-  #           get_resource: subnet
-  #         ip_address:
-  #           get_param: vm_ip_3
-
   floating_ip_vm_1:
     type: "OS::Neutron::FloatingIP"
     properties:
@@ -233,22 +224,6 @@ resources:
         get_param: external_network
       port_id:
         get_resource: port_vm_1
-
-  # floating_ip_vm_2:
-  #   type: "OS::Neutron::FloatingIP"
-  #   properties:
-  #     floating_network:
-  #       get_param: external_network
-  #     port_id:
-  #       get_resource: port_vm_2
-
-  # floating_ip_vm_3:
-  #   type: "OS::Neutron::FloatingIP"
-  #   properties:
-  #     floating_network:
-  #       get_param: external_network
-  #     port_id:
-  #       get_resource: port_vm_3
 
   vm_wait_handle:
     type: "OS::Heat::WaitConditionHandle"
@@ -279,6 +254,11 @@ resources:
                 lock_passwd: false
                 plain_text_passwd: root
                 ssh_authorized_keys: %ssh_keys%
+              - name: user
+                shell: /bin/bash
+                lock_passwd: true
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                ssh_authorized_keys: %ssh_keys%
 
             # https://cloudinit.readthedocs.io/en/latest/reference/modules.html#ansible
 
@@ -289,7 +269,14 @@ resources:
                 ansible-pull -U "https://github.com/s3rj1k/playground.git" \
                   playbooks/lab.yml \
                   -v \
-                  -e "REGISTRY_MIRROR='%registry_mirror%'"
+                  -e "REGISTRY_MIRROR='%registry_mirror%'" \
+                  -e "INSTALL_LIBVIRT=%install_libvirt%" \
+                  -e "INSTALL_ZOT=%install_zot%" \
+                  -e "INSTALL_CERT_MANAGER=%install_cert_manager%" \
+                  -e "INSTALL_FLUX_CD=%install_flux_cd%" \
+                  -e "INSTALL_CLUSTER_API_OPERATOR=%install_cluster_api_operator%" \
+                  -e "INSTALL_KRO=%install_kro%" \
+                  -e "INSTALL_K3K=%install_k3k%"
                 ANSIBLE_RESULT=$?
 
                 if [ $ANSIBLE_RESULT -eq 0 ]; then
@@ -305,6 +292,20 @@ resources:
                 - value
             "%registry_mirror%":
               get_param: registry_mirror
+            "%install_libvirt%":
+              get_param: install_libvirt
+            "%install_zot%":
+              get_param: install_zot
+            "%install_cert_manager%":
+              get_param: install_cert_manager
+            "%install_flux_cd%":
+              get_param: install_flux_cd
+            "%install_cluster_api_operator%":
+              get_param: install_cluster_api_operator
+            "%install_kro%":
+              get_param: install_kro
+            "%install_k3k%":
+              get_param: install_k3k
             "%wc_notify%":
               get_attr:
                 - vm_wait_handle
@@ -334,10 +335,6 @@ resources:
       networks:
         - port:
             get_resource: port_vm_1
-        # - port:
-        #     get_resource: port_vm_2
-        # - port:
-        #     get_resource: port_vm_3
       user_data_format: RAW
       user_data:
         get_attr:
@@ -351,20 +348,6 @@ outputs:
       get_attr:
         - floating_ip_vm_1
         - floating_ip_address
-
-  # vm_floating_ip_2:
-  #   description: Second floating IP address for VM
-  #   value:
-  #     get_attr:
-  #       - floating_ip_vm_2
-  #       - floating_ip_address
-
-  # vm_floating_ip_3:
-  #   description: Third floating IP address for VM
-  #   value:
-  #     get_attr:
-  #       - floating_ip_vm_3
-  #       - floating_ip_address
 
   vm_user_data:
     description: Rendered VM user-data

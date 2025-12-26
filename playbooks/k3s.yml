@@ -19,6 +19,11 @@
     SERVICE_CIDR: "172.21.0.0/16"
     K3S_EXTRA_FLAGS: ""
     REGISTRY_MIRROR: ""
+    INSTALL_CERT_MANAGER: true
+    INSTALL_FLUX_CD: true
+    INSTALL_CLUSTER_API_OPERATOR: true
+    INSTALL_KRO: true
+    INSTALL_K3K: true
 
   pre_tasks:
     - name: Wait for system to be ready
@@ -76,18 +81,21 @@
             url: https://github.com/jetstack/cert-manager/releases/latest/download/cert-manager.yaml
             dest: /var/lib/rancher/k3s/server/manifests/cert-manager.yaml
             mode: "0644"
+          when: INSTALL_CERT_MANAGER | bool
 
         - name: Download Flux CD manifest
           get_url:
             url: https://github.com/fluxcd/flux2/releases/latest/download/install.yaml
             dest: /var/lib/rancher/k3s/server/manifests/flux-cd.yaml
             mode: "0644"
+          when: INSTALL_FLUX_CD | bool
 
         - name: Download Cluster API Operator manifest
           get_url:
             url: https://github.com/kubernetes-sigs/cluster-api-operator/releases/latest/download/operator-components.yaml
             dest: /var/lib/rancher/k3s/server/manifests/cluster-api-operator.yaml
             mode: "0644"
+          when: INSTALL_CLUSTER_API_OPERATOR | bool
 
         - name: Create kro HelmChart manifest for k3s auto-deploy
           copy:
@@ -104,6 +112,7 @@
                 createNamespace: true
                 valuesContent: ""
             mode: "0644"
+          when: INSTALL_KRO | bool
 
         - name: Create k3k HelmChart manifest for k3s auto-deploy
           copy:
@@ -121,6 +130,7 @@
                 createNamespace: true
                 valuesContent: ""
             mode: "0644"
+          when: INSTALL_K3K | bool
 
     - name: Install k3s
       block:
@@ -196,3 +206,4 @@
             dest: /usr/local/bin/k3kcli
             mode: "0755"
           when: k3k_release_info is defined and k3k_release_info.status == 200
+      when: INSTALL_K3K | bool
