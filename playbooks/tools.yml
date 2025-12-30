@@ -35,6 +35,172 @@
       when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
 
   tasks:
+    - name: Install basic development tools
+      apt:
+        name:
+          - git
+          - make
+          - jq
+        state: present
+        update_cache: yes
+
+    - name: Install Go
+      block:
+        - name: Get latest Go version
+          uri:
+            url: "https://go.dev/dl/?mode=json"
+            return_content: yes
+          register: go_releases
+
+        - name: Set Go version
+          set_fact:
+            version: "{{ go_releases.json[0].version }}"
+          when: go_releases is defined and go_releases.status == 200
+
+        - name: Download Go archive ({{ version }})
+          get_url:
+            url: "https://go.dev/dl/{{ version }}.linux-amd64.tar.gz"
+            dest: /tmp/go.tar.gz
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Remove existing Go installation
+          file:
+            path: /usr/local/go
+            state: absent
+          when: version | trim | length > 0
+
+        - name: Extract Go archive
+          unarchive:
+            src: /tmp/go.tar.gz
+            dest: /usr/local
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Set Go environment variables
+          copy:
+            dest: /etc/profile.d/go.sh
+            content: |
+              export PATH="/usr/local/go/bin:$PATH"
+              export GOPATH="$HOME/go"
+              export PATH="$GOPATH/bin:$PATH"
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Remove temporary files
+          file:
+            path: /tmp/go.tar.gz
+            state: absent
+
+    - name: Install kustomize
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/kubernetes-sigs/kustomize/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/kubernetes-sigs/kustomize/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download archive
+          get_url:
+            url: "https://github.com/kubernetes-sigs/kustomize/releases/download/{{ version }}/kustomize_{{ version | replace('kustomize/', '') }}_linux_amd64.tar.gz"
+            dest: /tmp/kustomize.tar.gz
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Extract binary
+          unarchive:
+            src: /tmp/kustomize.tar.gz
+            dest: /tmp
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Install kustomize binary ({{ version }})
+          copy:
+            src: /tmp/kustomize
+            dest: /usr/local/bin/kustomize
+            mode: "0755"
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Remove temporary files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/kustomize.tar.gz
+            - /tmp/kustomize
+
+    - name: Install Tilt
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/tilt-dev/tilt/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/tilt-dev/tilt/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download archive
+          get_url:
+            url: "https://github.com/tilt-dev/tilt/releases/download/{{ version }}/tilt.{{ version | replace('v', '') }}.linux.x86_64.tar.gz"
+            dest: /tmp/tilt.tar.gz
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Extract binary
+          unarchive:
+            src: /tmp/tilt.tar.gz
+            dest: /tmp
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Install Tilt binary ({{ version }})
+          copy:
+            src: /tmp/tilt
+            dest: /usr/local/bin/tilt
+            mode: "0755"
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Remove temporary files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/tilt.tar.gz
+            - /tmp/tilt
+
+    - name: Install Kubebuilder
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/kubernetes-sigs/kubebuilder/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/kubernetes-sigs/kubebuilder/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download archive
+          get_url:
+            url: "https://github.com/kubernetes-sigs/kubebuilder/releases/download/{{ version }}/kubebuilder_linux_amd64"
+            dest: /usr/local/bin/kubebuilder
+            mode: "0755"
+          when: version | trim | length > 0
+
     - name: Install kubectl
       block:
         - name: Get latest version

@@ -44,6 +44,13 @@
         daemon_reload: yes
       when: ansible_service_mgr == 'systemd'
 
+    - name: Restart systemd-resolved
+      systemd:
+        name: systemd-resolved
+        state: restarted
+        daemon_reload: yes
+      when: ansible_service_mgr == 'systemd'
+
   tasks:
     - name: Update and upgrade system packages
       apt:
