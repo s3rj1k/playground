@@ -78,6 +78,12 @@ parameters:
     label: "Disable ServiceLB"
     default: true
 
+  sushy_hacks:
+    type: boolean
+    description: "Enable sushy-tools workarounds for boot order management"
+    label: "Enable Sushy Hacks"
+    default: true
+
   image_id:
     type: string
     description: "Image to use for the instances."
@@ -288,6 +294,7 @@ resources:
                   -v \
                   -e "REGISTRY_MIRROR='%registry_mirror%'" \
                   -e "INSTALL_LIBVIRT=%install_libvirt%" \
+                  -e "SUSHY_HACKS=%sushy_hacks%" \
                   -e "INSTALL_ZOT=%install_zot%" \
                   -e "INSTALL_CERT_MANAGER=%install_cert_manager%" \
                   -e "INSTALL_FLUX_CD=%install_flux_cd%" \
@@ -314,6 +321,8 @@ resources:
               get_param: registry_mirror
             "%install_libvirt%":
               get_param: install_libvirt
+            "%sushy_hacks%":
+              get_param: sushy_hacks
             "%install_zot%":
               get_param: install_zot
             "%install_cert_manager%":

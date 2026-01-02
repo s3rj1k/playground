@@ -19,6 +19,7 @@
   vars:
     REGISTRY_MIRROR: ""
     INSTALL_LIBVIRT: true
+    SUSHY_HACKS: true
     INSTALL_ZOT: true
     ZOT_LISTEN_ADDRESS: "0.0.0.0"
     ZOT_PORT: "4269"
@@ -38,6 +39,7 @@
       set_fact:
         REGISTRY_MIRROR: "{{ REGISTRY_MIRROR }}"
         INSTALL_LIBVIRT: "{{ INSTALL_LIBVIRT }}"
+        SUSHY_HACKS: "{{ SUSHY_HACKS }}"
         INSTALL_ZOT: "{{ INSTALL_ZOT }}"
         ZOT_LISTEN_ADDRESS: "{{ ZOT_LISTEN_ADDRESS }}"
         ZOT_PORT: "{{ ZOT_PORT }}"

@@ -12,12 +12,13 @@
   ignore_errors: false
 
   vars:
+    sushy_hacks: "{{ SUSHY_HACKS | default(true) }}"
     provisioning_network:
       name: default
       bridge: virbr0
       address: 172.17.1.1
       netmask: 255.255.255.0
-      forward_mode: nat  # nat, route, or none
+      forward_mode: nat # nat, route, or none
 
   pre_tasks:
     - name: Check if system is supported
@@ -259,6 +260,7 @@
     # Sushy-tools always sets boot device as "continuous" (persistent), ignoring one-time boot requests.
     # See: https://github.com/openstack/sushy-tools/blob/2.1.0/sushy_tools/emulator/main.py#L538-L540
     - name: Configure libvirt hook to reset boot order on VM stop
+      when: sushy_hacks
       block:
         - name: Ensure libvirt hooks directory exists
           file:
@@ -348,6 +350,7 @@
 
     # Monitor domain reboot events to reset boot order (hooks don't catch guest-initiated reboots)
     - name: Configure libvirt reboot event monitor
+      when: sushy_hacks
       block:
         - name: Create reboot event monitor script
           copy:
@@ -513,6 +516,12 @@
             mode: "0600"
             owner: root
             group: root
+
+        - name: Create symlink to Redfish credentials in /etc/sushy
+          file:
+            src: /root/.redfish_password
+            dest: /etc/sushy/.redfish_password
+            state: link
 
         - name: Create Sushy Tools configuration file
           copy:
