@@ -25,10 +25,10 @@ create-vm 3 virbr0
 ## Install ResourceGraphDefinitions
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/tinkerbell/rgd/tinkerbell-kubeadm-stack.yml
-kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/tinkerbell/rgd/tinkerbell-node.yml
-kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/tinkerbell/rgd/tinkerbell-kubeadm-cluster.yml
-kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/tinkerbell/rgd/tinkerbell-kubeadm-hosted-cluster.yml
+kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/tinkerbell-kubeadm-stack.yml
+kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/tinkerbell-node.yml
+kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/tinkerbell-kubeadm-cluster.yml
+kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/tinkerbell-kubeadm-hosted-cluster.yml
 ```
 
 ---
