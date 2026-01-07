@@ -260,7 +260,7 @@
     # Sushy-tools always sets boot device as "continuous" (persistent), ignoring one-time boot requests.
     # See: https://github.com/openstack/sushy-tools/blob/2.1.0/sushy_tools/emulator/main.py#L538-L540
     - name: Configure libvirt hook to reset boot order on VM stop
-      when: sushy_hacks
+      when: sushy_hacks | bool
       block:
         - name: Ensure libvirt hooks directory exists
           file:
@@ -350,7 +350,7 @@
 
     # Monitor domain reboot events to reset boot order (hooks don't catch guest-initiated reboots)
     - name: Configure libvirt reboot event monitor
-      when: sushy_hacks
+      when: sushy_hacks | bool
       block:
         - name: Create reboot event monitor script
           copy:

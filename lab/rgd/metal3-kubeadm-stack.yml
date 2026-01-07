@@ -1,0 +1,262 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: metal3kubeadmstack.v1alpha1.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Metal3KubeadmStack
+    spec:
+      namespace: string | default=capi-system
+      # Version Configuration
+      versions:
+        clusterAPI: string | default=v1.12.1
+        capm3Provider: string | default=v1.12.0
+        ipamProvider: string | default=v1.12.0
+        irso: string | default=v0.7.0
+        bmo: string | default=v0.12.0
+        addonHelm: string | default=v0.5.3
+      # Feature Flags
+      irso:
+        enabled: boolean | default=true
+      bmo:
+        enabled: boolean | default=true
+      ipam:
+        enabled: boolean | default=true
+    status:
+      coreProviderReady: ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      addonProviderReady: ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      bootstrapProviderReady: ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      controlPlaneProviderReady: ${controlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      infrastructureProviderReady: ${infrastructureProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      irsoCrdsReady: ${irsoCrds.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      irsoReady: ${irsoKustomization.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      bmoCrdsReady: ${bmoCrds.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      bmoReady: ${bmoKustomization.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      ipamProviderReady: ${ipamProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+  resources:
+    # Namespace for CAPI components
+    - id: capiNamespace
+      template:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ${schema.spec.namespace}
+
+    # Namespace for BMO/Ironic
+    - id: bmoNamespace
+      template:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: baremetal-operator-system
+
+    # Cluster API Core Provider
+    - id: coreProvider
+      readyWhen:
+        - ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: CoreProvider
+        metadata:
+          name: cluster-api
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          version: ${schema.spec.versions.clusterAPI}
+
+    # Addon Provider (Helm)
+    - id: addonProvider
+      readyWhen:
+        - ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: AddonProvider
+        metadata:
+          name: helm
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          version: ${schema.spec.versions.addonHelm}
+
+    # Bootstrap Provider (Kubeadm)
+    - id: bootstrapProvider
+      readyWhen:
+        - ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: BootstrapProvider
+        metadata:
+          name: kubeadm
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          version: ${schema.spec.versions.clusterAPI}
+
+    # Control Plane Provider (Kubeadm)
+    - id: controlPlaneProvider
+      readyWhen:
+        - ${controlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: ControlPlaneProvider
+        metadata:
+          name: kubeadm
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          version: ${schema.spec.versions.clusterAPI}
+
+    # IRSO GitRepository source
+    - id: irsoGitRepository
+      includeWhen:
+        - ${schema.spec.irso.enabled}
+      template:
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        metadata:
+          name: ironic-standalone-operator
+          namespace: ${bmoNamespace.metadata.name}
+        spec:
+          interval: 10m
+          url: https://github.com/metal3-io/ironic-standalone-operator
+          ref:
+            tag: ${schema.spec.versions.irso}
+
+    # IRSO CRDs Kustomization (installs CRDs first)
+    - id: irsoCrds
+      includeWhen:
+        - ${schema.spec.irso.enabled}
+      readyWhen:
+        - ${irsoCrds.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: ironic-standalone-operator-crds
+          namespace: ${bmoNamespace.metadata.name}
+        spec:
+          interval: 10m
+          sourceRef:
+            kind: GitRepository
+            name: ${irsoGitRepository.metadata.name}
+          path: ./config/crd
+          prune: true
+          wait: true
+          timeout: 5m
+
+    # IRSO Kustomization (installs the operator)
+    - id: irsoKustomization
+      includeWhen:
+        - ${schema.spec.irso.enabled}
+      readyWhen:
+        - ${irsoKustomization.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: ironic-standalone-operator
+          namespace: ${bmoNamespace.metadata.name}
+        spec:
+          interval: 10m
+          dependsOn:
+            - name: ${irsoCrds.metadata.name}
+          sourceRef:
+            kind: GitRepository
+            name: ${irsoGitRepository.metadata.name}
+          path: ./config/default
+          prune: true
+          targetNamespace: ${bmoNamespace.metadata.name}
+          wait: true
+          timeout: 5m
+
+    # BMO GitRepository source
+    - id: bmoGitRepository
+      includeWhen:
+        - ${schema.spec.bmo.enabled}
+      template:
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        metadata:
+          name: baremetal-operator
+          namespace: ${bmoNamespace.metadata.name}
+        spec:
+          interval: 10m
+          url: https://github.com/metal3-io/baremetal-operator
+          ref:
+            tag: ${schema.spec.versions.bmo}
+
+    # BMO CRDs Kustomization (installs CRDs first)
+    - id: bmoCrds
+      includeWhen:
+        - ${schema.spec.bmo.enabled}
+      readyWhen:
+        - ${bmoCrds.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: baremetal-operator-crds
+          namespace: ${bmoNamespace.metadata.name}
+        spec:
+          interval: 10m
+          sourceRef:
+            kind: GitRepository
+            name: ${bmoGitRepository.metadata.name}
+          path: ./config/base/crds
+          prune: true
+          wait: true
+          timeout: 5m
+
+    # BMO Kustomization (installs the operator)
+    - id: bmoKustomization
+      includeWhen:
+        - ${schema.spec.bmo.enabled}
+      readyWhen:
+        - ${bmoKustomization.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: baremetal-operator
+          namespace: ${bmoNamespace.metadata.name}
+        spec:
+          interval: 10m
+          dependsOn:
+            - name: ${bmoCrds.metadata.name}
+          sourceRef:
+            kind: GitRepository
+            name: ${bmoGitRepository.metadata.name}
+          path: ./config/overlays/basic-auth_tls
+          prune: true
+          targetNamespace: ${bmoNamespace.metadata.name}
+          wait: true
+          timeout: 5m
+
+    # Metal3 Infrastructure Provider
+    - id: infrastructureProvider
+      readyWhen:
+        - ${infrastructureProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: InfrastructureProvider
+        metadata:
+          name: metal3
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          version: ${schema.spec.versions.capm3Provider}
+          fetchConfig:
+            url: https://github.com/metal3-io/cluster-api-provider-metal3/releases/download/${schema.spec.versions.capm3Provider}/infrastructure-components.yaml
+
+    # IPAM Provider
+    - id: ipamProvider
+      includeWhen:
+        - ${schema.spec.ipam.enabled}
+      readyWhen:
+        - ${ipamProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: IPAMProvider
+        metadata:
+          name: metal3
+          namespace: ${capiNamespace.metadata.name}
+        spec:
+          version: ${schema.spec.versions.ipamProvider}
+          fetchConfig:
+            url: https://github.com/metal3-io/ip-address-manager/releases/download/${schema.spec.versions.ipamProvider}/ipam-components.yaml

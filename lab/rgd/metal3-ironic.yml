@@ -1,0 +1,185 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: metal3ironic.v1alpha1.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Metal3Ironic
+    spec:
+      namespace: string | default=baremetal-operator-system
+      # Credentials - reference to user-managed source secret
+      credentialsSourceSecretName: string | default=ironic-credentials-source
+      # Networking
+      networking:
+        ipAddress: string
+        interface: string | default=eth0
+        externalIP: string | default=""
+        imageServerPort: integer | default=6180
+        imageServerTLSPort: integer | default=6183
+        dhcp:
+          networkCIDR: string
+          rangeBegin: string
+          rangeEnd: string
+          dnsAddress: string | default=""
+          gatewayAddress: string | default=""
+          serveDNS: boolean | default=false
+      # TLS
+      tls:
+        enabled: boolean | default=true
+        disableVirtualMediaTLS: boolean | default=false
+      # Deploy Ramdisk
+      deployRamdisk:
+        sshKey: string | default=""
+        extraKernelParams: string | default=""
+      # Prometheus
+      prometheusExporter:
+        enabled: boolean | default=false
+      # BMO Settings
+      bmo:
+        concurrency: integer | default=4
+        provisioningLimit: integer | default=20
+    status:
+      ironicReady: ${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+  resources:
+    # Ironic ConfigMap for BMO (endpoint configuration)
+    - id: ironicConfigMap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ironic
+          namespace: ${schema.spec.namespace}
+        data:
+          IRONIC_ENDPOINT: https://ironic.${schema.spec.namespace}.svc:443/v1
+          BMO_CONCURRENCY: ${string(schema.spec.bmo.concurrency)}
+          PROVISIONING_LIMIT: ${string(schema.spec.bmo.provisioningLimit)}
+
+    # External reference to user-managed credentials source secret
+    - id: credentialsSource
+      externalRef:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${schema.spec.credentialsSourceSecretName}
+          namespace: ${schema.spec.namespace}
+
+    # KRO-managed credentials secret (copy from source)
+    - id: ironicCredentials
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ironic-credentials
+          namespace: ${schema.spec.namespace}
+        type: Opaque
+        data:
+          username: "${credentialsSource.data.username}"
+          password: "${credentialsSource.data.password}"
+
+    # Self-signed issuer for CA certificate
+    - id: selfSignedIssuer
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Issuer
+        metadata:
+          name: ironic-selfsigned
+          namespace: ${schema.spec.namespace}
+        spec:
+          selfSigned: {}
+
+    # CA Certificate (creates ironic-cacert secret for BMO)
+    - id: caCertificate
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: ironic-ca
+          namespace: ${schema.spec.namespace}
+        spec:
+          secretName: ironic-cacert
+          duration: 87600h
+          renewBefore: 720h
+          commonName: ironic-ca
+          isCA: true
+          issuerRef:
+            name: ${selfSignedIssuer.metadata.name}
+            kind: Issuer
+
+    # CA Issuer for signing Ironic TLS cert
+    - id: caIssuer
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Issuer
+        metadata:
+          name: ironic-ca-issuer
+          namespace: ${schema.spec.namespace}
+        spec:
+          ca:
+            secretName: ${caCertificate.spec.secretName}
+
+    # Ironic TLS certificate (signed by CA)
+    - id: ironicCertificate
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: ironic-tls
+          namespace: ${schema.spec.namespace}
+        spec:
+          secretName: ironic-tls
+          duration: 87600h
+          renewBefore: 720h
+          commonName: ironic
+          dnsNames:
+            - ironic
+            - ironic.${schema.spec.namespace}
+            - ironic.${schema.spec.namespace}.svc
+            - ironic.${schema.spec.namespace}.svc.cluster.local
+          ipAddresses:
+            - ${schema.spec.networking.ipAddress}
+          issuerRef:
+            name: ${caIssuer.metadata.name}
+            kind: Issuer
+
+    # Ironic instance
+    - id: ironic
+      readyWhen:
+        - ${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: ironic.metal3.io/v1alpha1
+        kind: Ironic
+        metadata:
+          name: ironic
+          namespace: ${schema.spec.namespace}
+        spec:
+          apiCredentialsName: ${ironicCredentials.metadata.name}
+          tls:
+            certificateName: ironic-tls
+            disableVirtualMediaTLS: ${schema.spec.tls.disableVirtualMediaTLS}
+          deployRamdisk:
+            sshKey: ${schema.spec.deployRamdisk.sshKey}
+            extraKernelParams: ${schema.spec.deployRamdisk.extraKernelParams}
+          prometheusExporter:
+            enabled: ${schema.spec.prometheusExporter.enabled}
+          networking:
+            interface: ${schema.spec.networking.interface}
+            ipAddress: ${schema.spec.networking.ipAddress}
+            externalIP: ${schema.spec.networking.externalIP}
+            imageServerPort: ${schema.spec.networking.imageServerPort}
+            imageServerTLSPort: ${schema.spec.networking.imageServerTLSPort}
+            dhcp:
+              networkCIDR: ${schema.spec.networking.dhcp.networkCIDR}
+              rangeBegin: ${schema.spec.networking.dhcp.rangeBegin}
+              rangeEnd: ${schema.spec.networking.dhcp.rangeEnd}
+              dnsAddress: ${schema.spec.networking.dhcp.dnsAddress}
+              gatewayAddress: ${schema.spec.networking.dhcp.gatewayAddress}
+              serveDNS: ${schema.spec.networking.dhcp.serveDNS}
