@@ -111,11 +111,10 @@ parameters:
   ansible_playbook:
     type: string
     description: "Ansible playbook to use"
-    default: "playbooks/k0s-deb.yml"
+    default: "playbooks/k0s-deb-crio.yml"
     label: "Ansible playbook"
     constraints:
       - allowed_values:
-          - playbooks/k0s-deb.yml
           - playbooks/k0s-deb-crio.yml
         description: "Must be a known Ansible playbook"
 
