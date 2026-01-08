@@ -50,6 +50,7 @@
     REGISTRY_MIRROR: ""
     WORKER_DATA: ""
     MANIFESTS_DIR: "/etc/kubernetes/manifests.d"
+    ENABLE_FLUX_CD: true
 
   pre_tasks:
     - name: Check if system is supported
@@ -768,41 +769,100 @@
         - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
         - CP_LB_IP is defined and CP_LB_IP | trim | length > 0
 
-    - name: Configure Local Path Provisioner
+    - name: Configure Addon Manager
+      # ref: https://github.com/kubernetes/kubernetes/blob/master/cluster/addons/addon-manager/README.md
+      # ref: https://github.com/kubernetes/kubernetes/blob/master/cluster/gce/manifests/kube-addon-manager.yaml
       block:
-        - name: Get latest version
-          uri:
-            url: "https://api.github.com/repos/rancher/local-path-provisioner/releases/latest"
-            return_content: yes
-          register: release_info
+        - name: Create addons directory
+          file:
+            path: /etc/kubernetes/addons
+            state: directory
+            mode: "0755"
+            owner: root
+            group: root
 
-        - name: Set version
-          set_fact:
-            # curl -s "https://api.github.com/repos/rancher/local-path-provisioner/releases/latest" | jq -r ".tag_name"
-            version: "{{ release_info.json.tag_name }}"
-          when: release_info is defined and release_info.status == 200
+        - name: Download kube-addon-manager manifest
+          ansible.builtin.get_url:
+            url: "https://raw.githubusercontent.com/kubernetes/kubernetes/master/cluster/gce/manifests/kube-addon-manager.yaml"
+            dest: /etc/kubernetes/manifests/kube-addon-manager.yaml
+            mode: "0644"
 
-        - name: Apply Local Path Provisioner manifest {{ version | default('') }}
-          command: kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ version }}/deploy/local-path-storage.yaml
-          environment:
-            KUBECONFIG: /etc/kubernetes/admin.conf
-          register: apply_result
-          until: apply_result.rc == 0
-          retries: 5
-          delay: 30
+        - name: Configure addon-manager runAsUser
+          ansible.builtin.replace:
+            path: /etc/kubernetes/manifests/kube-addon-manager.yaml
+            regexp: '\{\{runAsUser\}\}'
+            replace: '0'
 
-        - name: Set Local Path Storage as default storage class
+        - name: Configure addon-manager runAsGroup
+          ansible.builtin.replace:
+            path: /etc/kubernetes/manifests/kube-addon-manager.yaml
+            regexp: '\{\{runAsGroup\}\}'
+            replace: '0'
+
+        - name: Configure addon-manager kubectl_prune_whitelist_override
+          ansible.builtin.replace:
+            path: /etc/kubernetes/manifests/kube-addon-manager.yaml
+            regexp: '\{\{kubectl_prune_whitelist_override\}\}'
+            replace: ''
+
+        - name: Configure addon-manager kubectl_extra_prune_whitelist
+          ansible.builtin.replace:
+            path: /etc/kubernetes/manifests/kube-addon-manager.yaml
+            regexp: '\{\{kubectl_extra_prune_whitelist\}\}'
+            replace: ''
+
+        - name: Update KUBECTL_OPTS to use admin.conf
+          ansible.builtin.replace:
+            path: /etc/kubernetes/manifests/kube-addon-manager.yaml
+            regexp: '--kubeconfig=/etc/srv/kubernetes/addon-manager/kubeconfig'
+            replace: '--kubeconfig=/etc/kubernetes/admin.conf'
+
+        - name: Remove srvkube volume mount
+          ansible.builtin.replace:
+            path: /etc/kubernetes/manifests/kube-addon-manager.yaml
+            regexp: '^\s*- mountPath: /etc/srv/kubernetes/addon-manager/\n\s*name: srvkube\n\s*readOnly: true\n'
+            replace: ''
+
+        - name: Remove srvkube volume
+          ansible.builtin.replace:
+            path: /etc/kubernetes/manifests/kube-addon-manager.yaml
+            regexp: '^\s*- hostPath:\n\s*path: /etc/srv/kubernetes/addon-manager/\n\s*name: srvkube\n'
+            replace: ''
+
+        - name: Wait for addon-manager pod to be running
           shell: |
-            kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+            kubectl get pod kube-addon-manager-{{ ansible_hostname }} -n kube-system -o jsonpath='{.status.phase}'
           environment:
             KUBECONFIG: /etc/kubernetes/admin.conf
-          register: default_sc_result
-          until: default_sc_result.rc == 0
-          retries: 5
-          delay: 30
+          register: addon_manager_status
+          changed_when: false
+          until: addon_manager_status.stdout == "Running"
+          retries: 30
+          delay: 10
       when:
         - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
         - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
+
+    - name: Configure Flux CD
+      block:
+        - name: Download Flux CD manifest
+          ansible.builtin.get_url:
+            url: "https://github.com/fluxcd/flux2/releases/latest/download/install.yaml"
+            dest: /etc/kubernetes/addons/flux-cd.yaml
+            mode: "0644"
+
+        # https://github.com/kubernetes/kubernetes/blob/master/cluster/addons/addon-manager/README.md
+        # EnsureExists: Addon will only be created if it doesn't exist, users can modify it
+        # Reconcile: Addon will be periodically reconciled to match the manifest
+        - name: Add addon-manager label to Flux CD manifest
+          ansible.builtin.shell: |
+            sed -i '/^  labels:$/a\    addonmanager.kubernetes.io/mode: EnsureExists' /etc/kubernetes/addons/flux-cd.yaml
+          args:
+            executable: /bin/bash
+      when:
+        - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
+        - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
+        - ENABLE_FLUX_CD | default(true) | bool
 
     - name: Cleanup /etc/hosts bootstrap hack
       block:
