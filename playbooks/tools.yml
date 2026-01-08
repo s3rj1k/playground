@@ -333,6 +333,50 @@
             - /tmp/helm.tar.gz
             - /tmp/linux-amd64
 
+    - name: Install Flux CLI
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/fluxcd/flux2/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/fluxcd/flux2/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download archive
+          get_url:
+            url: "https://github.com/fluxcd/flux2/releases/download/{{ version }}/flux_{{ version | replace('v', '') }}_linux_amd64.tar.gz"
+            dest: /tmp/flux.tar.gz
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Extract binary
+          unarchive:
+            src: /tmp/flux.tar.gz
+            dest: /tmp
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Install Flux CLI binary ({{ version }})
+          copy:
+            src: /tmp/flux
+            dest: /usr/local/bin/flux
+            mode: "0755"
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Remove temporary files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/flux.tar.gz
+            - /tmp/flux
+
     - name: Install clusterctl
       block:
         - name: Get latest version

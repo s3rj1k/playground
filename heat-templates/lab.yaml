@@ -30,40 +30,16 @@ parameters:
     label: "Install Libvirt"
     default: true
 
+  sushy_hacks:
+    type: boolean
+    description: "Enable sushy-tools workarounds for boot order management"
+    label: "Enable Sushy Hacks"
+    default: false
+
   install_zot:
     type: boolean
     description: "Install Zot container registry"
     label: "Install Zot Registry"
-    default: true
-
-  install_cert_manager:
-    type: boolean
-    description: "Install cert-manager for certificate management"
-    label: "Install cert-manager"
-    default: true
-
-  install_flux_cd:
-    type: boolean
-    description: "Install Flux CD for GitOps"
-    label: "Install Flux CD"
-    default: true
-
-  install_cluster_api_operator:
-    type: boolean
-    description: "Install Cluster API Operator"
-    label: "Install Cluster API Operator"
-    default: true
-
-  install_kro:
-    type: boolean
-    description: "Install kro (Kubernetes Resource Orchestrator)"
-    label: "Install kro"
-    default: true
-
-  install_k3k:
-    type: boolean
-    description: "Install k3k (Kubernetes-in-Kubernetes)"
-    label: "Install k3k"
     default: true
 
   install_kite:
@@ -72,16 +48,16 @@ parameters:
     label: "Install Kite"
     default: true
 
-  disable_servicelb:
+  traefik_hcp_mode:
     type: boolean
-    description: "Disable K3s built-in ServiceLB. Must be disabled when using kube-vip as LoadBalancer."
-    label: "Disable ServiceLB"
-    default: true
+    description: "Configure Traefik for HCP (Hosted Control Plane)"
+    label: "Traefik HCP Mode"
+    default: false
 
-  sushy_hacks:
+  cilium_lb_enabled:
     type: boolean
-    description: "Enable sushy-tools workarounds for boot order management"
-    label: "Enable Sushy Hacks"
+    description: "Enable Cilium LoadBalancer (L2 announcements, kube-proxy replacement)"
+    label: "Cilium LB Enabled"
     default: true
 
   image_id:
@@ -93,7 +69,6 @@ parameters:
       - allowed_values:
           - ubuntu-24.04-minimal-cloudimg-amd64
           - debian-13-generic-amd64
-          - debian-13-btrfs-amd64
         description: "Must be a known Image ID"
 
   ssh_pub_key:
@@ -119,7 +94,7 @@ parameters:
   allocation_pool_start:
     type: string
     description: "Start of IP allocation pool"
-    default: "10.42.71.10"
+    default: "10.42.71.200"
     label: "Allocation Pool Start"
 
   allocation_pool_stop:
@@ -133,6 +108,12 @@ parameters:
     description: "First IP address for VM"
     default: "10.42.71.101"
     label: "VM IP 1"
+
+  lb_ip:
+    type: string
+    description: "IP address for Cilium LoadBalancer (Traefik)"
+    default: "10.42.71.102"
+    label: "LB IP"
 
   availability_zone:
     type: string
@@ -235,6 +216,25 @@ resources:
           ip_address:
             get_param: vm_ip_1
 
+  port_lb:
+    type: "OS::Neutron::Port"
+    properties:
+      name:
+        str_replace:
+          template: $prefix-port-lb
+          params:
+            $prefix:
+              get_param: prefix
+      network:
+        get_resource: network
+      admin_state_up: true
+      port_security_enabled: false
+      fixed_ips:
+        - subnet:
+            get_resource: subnet
+          ip_address:
+            get_param: lb_ip
+
   floating_ip_vm_1:
     type: "OS::Neutron::FloatingIP"
     properties:
@@ -242,6 +242,14 @@ resources:
         get_param: external_network
       port_id:
         get_resource: port_vm_1
+
+  floating_ip_lb:
+    type: "OS::Neutron::FloatingIP"
+    properties:
+      floating_network:
+        get_param: external_network
+      port_id:
+        get_resource: port_lb
 
   vm_wait_handle:
     type: "OS::Heat::WaitConditionHandle"
@@ -286,7 +294,7 @@ resources:
 
                 KITE_EXTRA_ARGS=""
                 if [ "%install_kite%" = "True" ]; then
-                  KITE_EXTRA_ARGS='-e {"KITE_HOSTNAMES":["%floating_ip%.nip.io"]}'
+                  KITE_EXTRA_ARGS='-e {"KITE_HOSTNAMES":["%vm_floating_ip%.nip.io","%lb_floating_ip%.nip.io"]}'
                 fi
 
                 ansible-pull -U "https://github.com/s3rj1k/playground.git" \
@@ -296,13 +304,11 @@ resources:
                   -e "INSTALL_LIBVIRT=%install_libvirt%" \
                   -e "SUSHY_HACKS=%sushy_hacks%" \
                   -e "INSTALL_ZOT=%install_zot%" \
-                  -e "INSTALL_CERT_MANAGER=%install_cert_manager%" \
-                  -e "INSTALL_FLUX_CD=%install_flux_cd%" \
-                  -e "INSTALL_CLUSTER_API_OPERATOR=%install_cluster_api_operator%" \
-                  -e "INSTALL_KRO=%install_kro%" \
-                  -e "INSTALL_K3K=%install_k3k%" \
                   -e "INSTALL_KITE=%install_kite%" \
-                  -e "DISABLE_SERVICELB=%disable_servicelb%" \
+                  -e "TRAEFIK_HCP_MODE=%traefik_hcp_mode%" \
+                  -e "CILIUM_LB_ENABLED=%cilium_lb_enabled%" \
+                  -e "LB_IP_RANGE_START=%lb_ip%" \
+                  -e "LB_IP_RANGE_STOP=%lb_ip%" \
                   $KITE_EXTRA_ARGS
                 ANSIBLE_RESULT=$?
 
@@ -325,21 +331,19 @@ resources:
               get_param: sushy_hacks
             "%install_zot%":
               get_param: install_zot
-            "%install_cert_manager%":
-              get_param: install_cert_manager
-            "%install_flux_cd%":
-              get_param: install_flux_cd
-            "%install_cluster_api_operator%":
-              get_param: install_cluster_api_operator
-            "%install_kro%":
-              get_param: install_kro
-            "%install_k3k%":
-              get_param: install_k3k
             "%install_kite%":
               get_param: install_kite
-            "%disable_servicelb%":
-              get_param: disable_servicelb
-            "%floating_ip%":
+            "%traefik_hcp_mode%":
+              get_param: traefik_hcp_mode
+            "%cilium_lb_enabled%":
+              get_param: cilium_lb_enabled
+            "%lb_ip%":
+              get_param: lb_ip
+            "%lb_floating_ip%":
+              get_attr:
+                - floating_ip_lb
+                - floating_ip_address
+            "%vm_floating_ip%":
               get_attr:
                 - floating_ip_vm_1
                 - floating_ip_address
@@ -380,10 +384,17 @@ resources:
 
 outputs:
   vm_floating_ip_1:
-    description: First floating IP address for VM
+    description: Floating IP address for VM (SSH, kube-apiserver)
     value:
       get_attr:
         - floating_ip_vm_1
+        - floating_ip_address
+
+  lb_floating_ip:
+    description: Floating IP address for LoadBalancer (Traefik, HCP)
+    value:
+      get_attr:
+        - floating_ip_lb
         - floating_ip_address
 
   vm_user_data:

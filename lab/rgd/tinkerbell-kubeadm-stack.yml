@@ -211,12 +211,15 @@ spec:
             optional:
               hookos:
                 enabled: true
+                hostNetwork: true
               kubevip:
                 enabled: ${schema.spec.kubevip.enabled}
                 image: ghcr.io/kube-vip/kube-vip:${schema.spec.versions.kubeVip}
                 additionalEnv:
                   - name: lb_enable
                     value: "${schema.spec.kubevip.lbEnable}"
+                  - name: vip_interface
+                    value: ${schema.spec.sourceInterface}
 
     # Kube-VIP Helm Repository
     - id: kubeVipRepo
@@ -232,6 +235,20 @@ spec:
           interval: 10m
           url: https://kube-vip.github.io/helm-charts
 
+    # Kube-VIP Cloud Provider ConfigMap (initial/placeholder)
+    # This ensures the configmap exists before the controller starts.
+    # The hosted-cluster RGD will update this with actual IP ranges.
+    - id: kubeVipConfigMap
+      includeWhen:
+        - ${schema.spec.kubevip.enabled}
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: kube-vip-cloud-provider
+          namespace: ${capiNamespace.metadata.name}
+        data: {}
+
     # Kube-VIP Cloud Provider Helm Release
     - id: kubeVipRelease
       includeWhen:
@@ -243,7 +260,7 @@ spec:
         kind: HelmRelease
         metadata:
           name: kube-vip-cloud-provider
-          namespace: ${capiNamespace.metadata.name}
+          namespace: ${kubeVipConfigMap.metadata.namespace}
         spec:
           interval: 10m
           chart:

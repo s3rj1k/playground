@@ -5,8 +5,10 @@
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "K3S_TOKEN=mytoken" playbooks/k3s.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "CLUSTER_CIDR=10.42.0.0/16" playbooks/k3s.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "REGISTRY_MIRROR=https://registry.example.com:5000" playbooks/k3s.yml
-#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "KITE_HOSTNAMES=['kite.local','kite.example.com']" playbooks/k3s.yml
 #        ansible-pull -U https://github.com/s3rj1k/playground.git -e "DISABLE_SERVICELB=true" playbooks/k3s.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "DISABLE_TRAEFIK=true" playbooks/k3s.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "DISABLE_LOCAL_STORAGE=true" playbooks/k3s.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "DISABLE_COREDNS=true" playbooks/k3s.yml
 
 ---
 - name: Kubernetes (k3s)
@@ -21,16 +23,12 @@
     SERVICE_CIDR: "172.21.0.0/16"
     K3S_EXTRA_FLAGS: ""
     DISABLE_SERVICELB: false
+    DISABLE_TRAEFIK: false
+    DISABLE_LOCAL_STORAGE: false
+    DISABLE_COREDNS: false
     REGISTRY_MIRROR: ""
-    INSTALL_CERT_MANAGER: true
     INSTALL_FLUX_CD: true
-    INSTALL_CLUSTER_API_OPERATOR: true
-    INSTALL_KRO: true
     INSTALL_K3K: true
-    INSTALL_KITE: true
-    KITE_HOSTNAMES:
-      - "kite.local"
-    KITE_TLS_PORT: 4271
 
   pre_tasks:
     - name: Wait for system to be ready
@@ -83,49 +81,33 @@
             state: directory
             mode: "0755"
 
-        - name: Download cert-manager manifest
-          get_url:
-            url: https://github.com/jetstack/cert-manager/releases/latest/download/cert-manager.yaml
-            dest: /var/lib/rancher/k3s/server/manifests/cert-manager.yaml
-            mode: "0644"
-          when: INSTALL_CERT_MANAGER | bool
-
-        - name: Create self-signed ClusterIssuer for cert-manager
-          copy:
-            dest: /var/lib/rancher/k3s/server/manifests/cert-manager-selfsigned-issuer.yaml
-            content: |
-              apiVersion: cert-manager.io/v1
-              kind: ClusterIssuer
-              metadata:
-                name: selfsigned-issuer
-              spec:
-                selfSigned: {}
-            mode: "0644"
-          when: INSTALL_CERT_MANAGER | bool
-
         - name: Get latest Gateway API release version
           uri:
             url: https://api.github.com/repos/kubernetes-sigs/gateway-api/releases/latest
             return_content: yes
           register: gateway_api_release
+          when: not DISABLE_TRAEFIK | bool
 
         - name: Install experimental Gateway API TLSRoute CRD
           get_url:
             url: "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/{{ gateway_api_release.json.tag_name }}/config/crd/experimental/gateway.networking.k8s.io_tlsroutes.yaml"
             dest: /var/lib/rancher/k3s/server/manifests/gateway-tlsroute-crd.yaml
             mode: "0644"
+          when: not DISABLE_TRAEFIK | bool
 
         - name: Install experimental Gateway API TCPRoute CRD
           get_url:
             url: "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/{{ gateway_api_release.json.tag_name }}/config/crd/experimental/gateway.networking.k8s.io_tcproutes.yaml"
             dest: /var/lib/rancher/k3s/server/manifests/gateway-tcproute-crd.yaml
             mode: "0644"
+          when: not DISABLE_TRAEFIK | bool
 
         - name: Install experimental Gateway API BackendTLSPolicy CRD
           get_url:
             url: "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/{{ gateway_api_release.json.tag_name }}/config/crd/experimental/gateway.networking.k8s.io_backendtlspolicies.yaml"
             dest: /var/lib/rancher/k3s/server/manifests/gateway-backendtlspolicy-crd.yaml
             mode: "0644"
+          when: not DISABLE_TRAEFIK | bool
 
         - name: Configure Traefik with Gateway API and custom entrypoints
           copy:
@@ -144,6 +126,7 @@
                       experimentalChannel: true
                   gateway:
                     enabled: true
+              {% if DISABLE_SERVICELB | bool %}
                   ports:
                     web:
                       expose:
@@ -151,7 +134,6 @@
                     websecure:
                       expose:
                         default: false
-              {% if DISABLE_SERVICELB | bool %}
                     hcp:
                       port: 8132
                       expose:
@@ -171,20 +153,8 @@
                       exposedPort: 6443
                       protocol: TCP
               {% endif %}
-              {% if INSTALL_KITE | bool %}
-                    kite:
-                      port: {{ KITE_TLS_PORT }}
-                      expose:
-                        default: true
-                      exposedPort: {{ KITE_TLS_PORT }}
-              {% if DISABLE_SERVICELB | bool %}
-                      hostPort: {{ KITE_TLS_PORT }}
-              {% endif %}
-                      protocol: TCP
-                      tls:
-                        enabled: true
-              {% endif %}
             mode: "0644"
+          when: not DISABLE_TRAEFIK | bool
 
         - name: Download Flux CD manifest
           get_url:
@@ -192,30 +162,6 @@
             dest: /var/lib/rancher/k3s/server/manifests/flux-cd.yaml
             mode: "0644"
           when: INSTALL_FLUX_CD | bool
-
-        - name: Download Cluster API Operator manifest
-          get_url:
-            url: https://github.com/kubernetes-sigs/cluster-api-operator/releases/latest/download/operator-components.yaml
-            dest: /var/lib/rancher/k3s/server/manifests/cluster-api-operator.yaml
-            mode: "0644"
-          when: INSTALL_CLUSTER_API_OPERATOR | bool
-
-        - name: Create kro HelmChart manifest for k3s auto-deploy
-          copy:
-            dest: /var/lib/rancher/k3s/server/manifests/kro-helmchart.yaml
-            content: |
-              apiVersion: helm.cattle.io/v1
-              kind: HelmChart
-              metadata:
-                name: kro
-                namespace: kube-system
-              spec:
-                chart: oci://registry.k8s.io/kro/charts/kro
-                targetNamespace: kro-system
-                createNamespace: true
-                valuesContent: ""
-            mode: "0644"
-          when: INSTALL_KRO | bool
 
         - name: Create k3k HelmChart manifest for k3s auto-deploy
           copy:
@@ -235,78 +181,6 @@
             mode: "0644"
           when: INSTALL_K3K | bool
 
-        - name: Generate kite admin password
-          set_fact:
-            kite_admin_password: "{{ lookup('password', '/dev/null length=16 chars=ascii_letters,digits') }}"
-          when: INSTALL_KITE | bool
-
-        - name: Create kite HelmChart manifest for k3s auto-deploy
-          copy:
-            dest: /var/lib/rancher/k3s/server/manifests/kite-helmchart.yaml
-            content: |
-              apiVersion: helm.cattle.io/v1
-              kind: HelmChart
-              metadata:
-                name: kite
-                namespace: kube-system
-              spec:
-                chart: kite
-                repo: https://zxh326.github.io/kite
-                targetNamespace: kite-system
-                createNamespace: true
-                valuesContent: |
-                  service:
-                    port: {{ KITE_TLS_PORT }}
-                    targetPort: {{ KITE_TLS_PORT }}
-                  extraEnvs:
-                    - name: PORT
-                      value: "{{ KITE_TLS_PORT }}"
-                    - name: ENABLE_ANALYTICS
-                      value: "false"
-                  superUser:
-                    create: true
-                    username: "admin"
-                    password: "{{ kite_admin_password }}"
-                  ingress:
-                    enabled: true
-                    className: "traefik"
-                    annotations:
-                      cert-manager.io/cluster-issuer: "selfsigned-issuer"
-                      traefik.ingress.kubernetes.io/router.entrypoints: "kite"
-                      traefik.ingress.kubernetes.io/router.tls: "true"
-                    hosts:
-                      - paths:
-                          - path: /
-                            pathType: Prefix
-              {% for hostname in KITE_HOSTNAMES %}
-                      - host: "{{ hostname }}"
-                        paths:
-                          - path: /
-                            pathType: Prefix
-              {% endfor %}
-                    tls:
-                      - secretName: kite-tls
-                        hosts:
-              {% for hostname in KITE_HOSTNAMES %}
-                          - "{{ hostname }}"
-              {% endfor %}
-            mode: "0644"
-          when: INSTALL_KITE | bool
-
-        - name: Save kite credentials to file
-          copy:
-            dest: /root/.kite-credentials
-            content: |
-              Kite Dashboard Credentials
-              ==========================
-              {% for hostname in KITE_HOSTNAMES %}
-              URL:      https://{{ hostname }}:{{ KITE_TLS_PORT }}/
-              {% endfor %}
-              Username: admin
-              Password: {{ kite_admin_password }}
-            mode: "0600"
-          when: INSTALL_KITE | bool
-
     - name: Install k3s
       block:
         - name: Download k3s installation script
@@ -321,6 +195,9 @@
               --cluster-cidr={{ CLUSTER_CIDR }} \
               --service-cidr={{ SERVICE_CIDR }} \
               {{ '--disable=servicelb' if DISABLE_SERVICELB | bool else '' }} \
+              {{ '--disable=traefik' if DISABLE_TRAEFIK | bool else '' }} \
+              {{ '--disable=local-storage' if DISABLE_LOCAL_STORAGE | bool else '' }} \
+              {{ '--disable=coredns' if DISABLE_COREDNS | bool else '' }} \
               {{ K3S_EXTRA_FLAGS }}
           args:
             executable: /bin/bash
@@ -335,6 +212,9 @@
               --cluster-cidr={{ CLUSTER_CIDR }} \
               --service-cidr={{ SERVICE_CIDR }} \
               {{ '--disable=servicelb' if DISABLE_SERVICELB | bool else '' }} \
+              {{ '--disable=traefik' if DISABLE_TRAEFIK | bool else '' }} \
+              {{ '--disable=local-storage' if DISABLE_LOCAL_STORAGE | bool else '' }} \
+              {{ '--disable=coredns' if DISABLE_COREDNS | bool else '' }} \
               {{ K3S_EXTRA_FLAGS }}
           args:
             executable: /bin/bash

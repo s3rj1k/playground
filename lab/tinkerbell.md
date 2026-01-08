@@ -3,7 +3,10 @@
 ## Setup Lab
 
 ```bash
-ansible-pull -U https://github.com/s3rj1k/playground.git -e "DISABLE_SERVICELB=true" playbooks/lab.yml
+ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/lab.yml \
+  -e "CILIUM_LB_ENABLED=false" \
+  -e "TRAEFIK_HCP_MODE=true" \
+  -e "SUSHY_HACKS=true"
 ```
 
 > **Note:** Use Debian/Ubuntu AMD64 VM

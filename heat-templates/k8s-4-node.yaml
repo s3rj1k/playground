@@ -56,7 +56,7 @@ parameters:
   allocation_pool_start:
     type: string
     description: "Start of IP allocation pool"
-    default: "10.42.71.10"
+    default: "10.42.71.200"
     label: "Allocation Pool Start"
 
   allocation_pool_stop:

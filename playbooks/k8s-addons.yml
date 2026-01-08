@@ -1,0 +1,628 @@
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
+# DEBUG: ansible-playbook playbooks/k8s-addons.yml
+#        ansible-playbook playbooks/k8s-addons.yml -e "KUBECONFIG=/etc/kubernetes/admin.conf"
+#        ansible-playbook playbooks/k8s-addons.yml -e "INSTALL_OPENEBS=false"
+#        ansible-playbook playbooks/k8s-addons.yml -e "INSTALL_LOCAL_PATH_PROVISIONER=true"
+
+---
+- name: Kubernetes Addons via FluxCD
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+  vars:
+    KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') | default('/root/.kube/config', true) }}"
+    INSTALL_CERT_MANAGER: true
+    INSTALL_FLUX_CD: true
+    INSTALL_CLUSTER_API_OPERATOR: true
+    INSTALL_KRO: true
+    INSTALL_KITE: true
+    INSTALL_TRAEFIK: true
+    TRAEFIK_HCP_MODE: false
+    CILIUM_LB_ENABLED: true
+    INSTALL_OPENEBS: true
+    INSTALL_LOCAL_PATH_PROVISIONER: false
+    KITE_HOSTNAMES:
+      - "kite.local"
+    KITE_TLS_PORT: 4271
+    KITE_NODEPORT: 30271
+
+  tasks:
+    - name: Install Flux CD
+      block:
+        - name: Check if Flux CD is already installed
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} get namespace flux-system 2>/dev/null
+          register: flux_ns_check
+          failed_when: false
+          changed_when: false
+
+        - name: Download and apply Flux CD manifest
+          shell: |
+            curl -sL https://github.com/fluxcd/flux2/releases/latest/download/install.yaml | \
+              kubectl --kubeconfig={{ KUBECONFIG }} apply -f -
+          args:
+            executable: /bin/bash
+          when: flux_ns_check.rc != 0
+
+        - name: Wait for Flux CD controllers to be ready
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} -n flux-system wait --for=condition=Available deployment --all --timeout=300s
+          args:
+            executable: /bin/bash
+          register: flux_ready
+          until: flux_ready.rc == 0
+          retries: 10
+          delay: 30
+      when: INSTALL_FLUX_CD | bool
+
+    - name: Create FluxCD HelmRepositories
+      shell: |
+        kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: jetstack
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: https://charts.jetstack.io
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: traefik
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: https://traefik.github.io/charts
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: openebs
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: https://openebs.github.io/openebs
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: kite
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: https://zxh326.github.io/kite
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: capi-operator
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: https://kubernetes-sigs.github.io/cluster-api-operator
+        EOF
+      args:
+        executable: /bin/bash
+
+    - name: Install cert-manager
+      block:
+        - name: Deploy cert-manager HelmRelease
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata:
+              name: cert-manager
+              namespace: flux-system
+            spec:
+              interval: 1h
+              targetNamespace: cert-manager
+              chart:
+                spec:
+                  chart: cert-manager
+                  sourceRef:
+                    kind: HelmRepository
+                    name: jetstack
+                  interval: 1h
+              install:
+                crds: CreateReplace
+                createNamespace: true
+                remediation:
+                  retries: 3
+              upgrade:
+                crds: CreateReplace
+                remediation:
+                  retries: 3
+              values:
+                crds:
+                  enabled: true
+            EOF
+          args:
+            executable: /bin/bash
+
+        - name: Wait for cert-manager to be ready
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} -n cert-manager wait --for=condition=Available deployment --all --timeout=300s
+          args:
+            executable: /bin/bash
+          register: cert_manager_ready
+          until: cert_manager_ready.rc == 0
+          retries: 10
+          delay: 30
+
+        - name: Create self-signed ClusterIssuer
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+            apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: selfsigned-issuer
+            spec:
+              selfSigned: {}
+            EOF
+          args:
+            executable: /bin/bash
+      when: INSTALL_CERT_MANAGER | bool
+
+    - name: Install Gateway API experimental CRDs
+      block:
+        - name: Get latest Gateway API release version
+          uri:
+            url: https://api.github.com/repos/kubernetes-sigs/gateway-api/releases/latest
+            return_content: yes
+          register: gateway_api_release
+
+        - name: Install Gateway API experimental channel CRDs
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply --server-side -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ gateway_api_release.json.tag_name }}/experimental-install.yaml"
+          args:
+            executable: /bin/bash
+      when: INSTALL_TRAEFIK | bool
+
+    - name: Install Traefik
+      block:
+        - name: Deploy Traefik HelmRelease
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata:
+              name: traefik
+              namespace: flux-system
+            spec:
+              interval: 1h
+              targetNamespace: traefik-system
+              chart:
+                spec:
+                  chart: traefik
+                  sourceRef:
+                    kind: HelmRepository
+                    name: traefik
+                  interval: 1h
+              install:
+                crds: CreateReplace
+                createNamespace: true
+                remediation:
+                  retries: 3
+              upgrade:
+                crds: CreateReplace
+                remediation:
+                  retries: 3
+              values:
+                ingressClass:
+                  name: traefik
+                providers:
+                  kubernetesGateway:
+                    enabled: true
+                    experimentalChannel: true
+                gateway:
+                  enabled: true
+            {% if CILIUM_LB_ENABLED | bool %}
+                service:
+                  loadBalancerClass: io.cilium/l2-announcer
+                  annotations:
+                    kube-vip.io/loadbalancerIPs: "0.0.0.0"
+                    kube-vip.io/ignore: "true"
+            {% endif %}
+                ingressRoute:
+                  dashboard:
+                    enabled: false
+                ports:
+                  web:
+                    expose:
+            {% if TRAEFIK_HCP_MODE | bool %}
+                      default: false
+            {% else %}
+                      default: true
+            {% endif %}
+                  websecure:
+            {% if TRAEFIK_HCP_MODE | bool %}
+                    port: 18443
+                    expose:
+                      default: false
+            {% else %}
+                    expose:
+                      default: true
+            {% endif %}
+                    tls:
+                      enabled: true
+                  kite:
+                    port: {{ KITE_TLS_PORT }}
+                    expose:
+                      default: false
+                    protocol: TCP
+            {% if TRAEFIK_HCP_MODE | bool %}
+                  hcp:
+                    port: 8132
+                    expose:
+                      default: true
+                    exposedPort: 8132
+                    protocol: TCP
+                  hcpgw:
+                    port: 8443
+                    expose:
+                      default: true
+                    exposedPort: 443
+                    protocol: TCP
+                  hcplegacy:
+                    port: 9443
+                    expose:
+                      default: true
+                    exposedPort: 6443
+                    protocol: TCP
+            {% endif %}
+            EOF
+          args:
+            executable: /bin/bash
+      when: INSTALL_TRAEFIK | bool
+
+    - name: Install OpenEBS
+      block:
+        - name: Deploy OpenEBS HelmRelease
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata:
+              name: openebs
+              namespace: flux-system
+            spec:
+              interval: 1h
+              targetNamespace: openebs
+              chart:
+                spec:
+                  chart: openebs
+                  sourceRef:
+                    kind: HelmRepository
+                    name: openebs
+                  interval: 1h
+              install:
+                crds: CreateReplace
+                createNamespace: true
+                remediation:
+                  retries: 3
+              upgrade:
+                crds: CreateReplace
+                remediation:
+                  retries: 3
+              values:
+                # Disable observability stack (Loki, MinIO, Alloy)
+                loki:
+                  enabled: false
+                minio:
+                  enabled: false
+                alloy:
+                  enabled: false
+                # Disable unused storage engines
+                engines:
+                  local:
+                    lvm:
+                      enabled: false
+                    zfs:
+                      enabled: false
+                  replicated:
+                    mayastor:
+                      enabled: false
+                localpv-provisioner:
+                  hostpathClass:
+                    enabled: true
+                    isDefaultClass: true
+            EOF
+          args:
+            executable: /bin/bash
+      when: INSTALL_OPENEBS | bool
+
+    # https://github.com/rancher/local-path-provisioner
+    - name: Install Local Path Provisioner
+      block:
+        - name: Deploy Local Path Provisioner HelmRelease (OCI)
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+            apiVersion: source.toolkit.fluxcd.io/v1
+            kind: HelmRepository
+            metadata:
+              name: local-path-provisioner
+              namespace: flux-system
+            spec:
+              type: oci
+              interval: 1h
+              url: oci://ghcr.io/rancher/local-path-provisioner/charts
+            ---
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata:
+              name: local-path-provisioner
+              namespace: flux-system
+            spec:
+              interval: 1h
+              targetNamespace: local-path-storage
+              chart:
+                spec:
+                  chart: local-path-provisioner
+                  sourceRef:
+                    kind: HelmRepository
+                    name: local-path-provisioner
+                  interval: 1h
+              install:
+                crds: CreateReplace
+                createNamespace: true
+                remediation:
+                  retries: 3
+              upgrade:
+                crds: CreateReplace
+                remediation:
+                  retries: 3
+              values:
+                storageClass:
+                  defaultClass: true
+            EOF
+          args:
+            executable: /bin/bash
+      when: INSTALL_LOCAL_PATH_PROVISIONER | bool
+
+    - name: Install Cluster API Operator
+      block:
+        - name: Deploy Cluster API Operator HelmRelease
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata:
+              name: cluster-api-operator
+              namespace: flux-system
+            spec:
+              interval: 1h
+              targetNamespace: capi-operator-system
+              chart:
+                spec:
+                  chart: cluster-api-operator
+                  sourceRef:
+                    kind: HelmRepository
+                    name: capi-operator
+                  interval: 1h
+              install:
+                crds: CreateReplace
+                createNamespace: true
+                remediation:
+                  retries: 3
+              upgrade:
+                crds: CreateReplace
+                remediation:
+                  retries: 3
+              values:
+                cert-manager:
+                  enabled: false
+            EOF
+          args:
+            executable: /bin/bash
+      when: INSTALL_CLUSTER_API_OPERATOR | bool
+
+    - name: Install KRO
+      block:
+        - name: Deploy KRO HelmRelease (OCI)
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+            apiVersion: source.toolkit.fluxcd.io/v1
+            kind: HelmRepository
+            metadata:
+              name: kro
+              namespace: flux-system
+            spec:
+              type: oci
+              interval: 1h
+              url: oci://registry.k8s.io/kro/charts
+            ---
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata:
+              name: kro
+              namespace: flux-system
+            spec:
+              interval: 1h
+              targetNamespace: kro-system
+              chart:
+                spec:
+                  chart: kro
+                  sourceRef:
+                    kind: HelmRepository
+                    name: kro
+                  interval: 1h
+              install:
+                crds: CreateReplace
+                createNamespace: true
+                remediation:
+                  retries: 3
+              upgrade:
+                crds: CreateReplace
+                remediation:
+                  retries: 3
+            EOF
+          args:
+            executable: /bin/bash
+      when: INSTALL_KRO | bool
+
+    - name: Install Kite
+      block:
+        - name: Wait for Traefik to be ready
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} -n traefik-system wait --for=condition=Available deployment --all --timeout=300s
+          args:
+            executable: /bin/bash
+          register: traefik_ready
+          until: traefik_ready.rc == 0
+          retries: 10
+          delay: 30
+
+        - name: Generate kite admin password
+          set_fact:
+            kite_admin_password: "{{ lookup('password', '/dev/null length=16 chars=ascii_letters,digits') }}"
+
+        - name: Deploy Kite Gateway resources
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+            ---
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: kite-system
+            ---
+            apiVersion: cert-manager.io/v1
+            kind: Certificate
+            metadata:
+              name: kite-tls
+              namespace: kite-system
+            spec:
+              secretName: kite-tls
+              issuerRef:
+                name: selfsigned-issuer
+                kind: ClusterIssuer
+              dnsNames:
+            {% for hostname in KITE_HOSTNAMES %}
+                - "{{ hostname }}"
+            {% endfor %}
+            ---
+            apiVersion: gateway.networking.k8s.io/v1
+            kind: Gateway
+            metadata:
+              name: kite
+              namespace: kite-system
+            spec:
+              gatewayClassName: traefik
+              listeners:
+                - name: https
+                  protocol: HTTPS
+                  port: {{ KITE_TLS_PORT }}
+                  tls:
+                    mode: Terminate
+                    certificateRefs:
+                      - name: kite-tls
+                  allowedRoutes:
+                    namespaces:
+                      from: Same
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: kite-gateway
+              namespace: traefik-system
+            spec:
+              type: NodePort
+              selector:
+                app.kubernetes.io/name: traefik
+              ports:
+                - name: kite
+                  protocol: TCP
+                  port: {{ KITE_TLS_PORT }}
+                  targetPort: kite
+                  nodePort: {{ KITE_NODEPORT }}
+            ---
+            apiVersion: gateway.networking.k8s.io/v1
+            kind: HTTPRoute
+            metadata:
+              name: kite
+              namespace: kite-system
+            spec:
+              parentRefs:
+                - name: kite
+                  namespace: kite-system
+              hostnames:
+            {% for hostname in KITE_HOSTNAMES %}
+                - "{{ hostname }}"
+            {% endfor %}
+              rules:
+                - matches:
+                    - path:
+                        type: PathPrefix
+                        value: /
+                  backendRefs:
+                    - name: kite
+                      port: {{ KITE_TLS_PORT }}
+            EOF
+          args:
+            executable: /bin/bash
+
+        - name: Deploy Kite HelmRelease
+          shell: |
+            kubectl --kubeconfig={{ KUBECONFIG }} apply -f - <<'EOF'
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata:
+              name: kite
+              namespace: flux-system
+            spec:
+              interval: 1h
+              releaseName: kite
+              targetNamespace: kite-system
+              chart:
+                spec:
+                  chart: kite
+                  sourceRef:
+                    kind: HelmRepository
+                    name: kite
+                  interval: 1h
+              install:
+                crds: CreateReplace
+                createNamespace: true
+                remediation:
+                  retries: 3
+              upgrade:
+                crds: CreateReplace
+                remediation:
+                  retries: 3
+              values:
+                service:
+                  port: {{ KITE_TLS_PORT }}
+                  targetPort: {{ KITE_TLS_PORT }}
+                extraEnvs:
+                  - name: PORT
+                    value: "{{ KITE_TLS_PORT }}"
+                  - name: ENABLE_ANALYTICS
+                    value: "false"
+                superUser:
+                  create: true
+                  username: "admin"
+                  password: "{{ kite_admin_password }}"
+                ingress:
+                  enabled: false
+            EOF
+          args:
+            executable: /bin/bash
+
+        - name: Save kite credentials to file
+          copy:
+            dest: /root/.kite-credentials
+            content: |
+              Kite Dashboard Credentials
+              ==========================
+              {% for hostname in KITE_HOSTNAMES %}
+              URL:      https://{{ hostname }}:{{ KITE_NODEPORT }}/
+              {% endfor %}
+              Username: admin
+              Password: {{ kite_admin_password }}
+            mode: "0600"
+      when: INSTALL_KITE | bool

@@ -9,6 +9,10 @@
 # Single control plane node:
 #   ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k8s-deb.yml
 #
+# Custom pod/service CIDRs:
+#   ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k8s-deb.yml \
+#     -e CLUSTER_CIDR=172.20.0.0/16 -e SERVICE_CIDR=172.21.0.0/16
+#
 # HA control plane with Cilium L2 LoadBalancer:
 #   # First CP node:
 #   ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k8s-deb.yml -e CP_LB_IP=192.168.42.42
@@ -43,6 +47,8 @@
   vars:
     KUBERNETES_VERSION: "v1.34"
     CRIO_VERSION: "v1.34"
+    CLUSTER_CIDR: "10.244.0.0/16"
+    SERVICE_CIDR: "10.96.0.0/16"
     LB_IP_RANGE_START: ""
     LB_IP_RANGE_STOP: ""
     CP_LB_IP: ""
@@ -51,6 +57,7 @@
     WORKER_DATA: ""
     MANIFESTS_DIR: "/etc/kubernetes/manifests.d"
     ENABLE_FLUX_CD: true
+    CILIUM_LB_ENABLED: true
 
   pre_tasks:
     - name: Check if system is supported
@@ -505,6 +512,9 @@
               {% if CP_LB_IP is defined and CP_LB_IP | trim | length > 0 %}
               controlPlaneEndpoint: "{{ CP_LB_IP }}.nip.io:6443"
               {% endif %}
+              networking:
+                podSubnet: "{{ CLUSTER_CIDR }}"
+                serviceSubnet: "{{ SERVICE_CIDR }}"
               ---
               apiVersion: kubelet.config.k8s.io/v1beta1
               kind: KubeletConfiguration
@@ -547,6 +557,19 @@
           changed_when: remove_taint.rc == 0
           failed_when: false
           when: taint_check.stdout | length > 0
+
+        - name: Create .kube directory
+          file:
+            path: /root/.kube
+            state: directory
+            mode: "0755"
+
+        - name: Copy kubeconfig to .kube/config
+          copy:
+            src: /etc/kubernetes/admin.conf
+            dest: /root/.kube/config
+            remote_src: true
+            mode: "0600"
       when:
         - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
         - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
@@ -607,10 +630,15 @@
             cilium install
             --version {{ cilium_version }}
             --kubeconfig /etc/kubernetes/admin.conf
+            {% if CILIUM_LB_ENABLED | bool %}
             --set kubeProxyReplacement=true
             --set l2announcements.enabled=true
+            --set lbIPAM.defaultServiceIPAM=none
+            --set bpf-lb-sock-hostns-only=true
+            {% endif %}
             --set k8sClientRateLimit.qps=10
             --set k8sClientRateLimit.burst=30
+            --set ipam.operator.clusterPoolIPv4PodCIDRList={{ CLUSTER_CIDR }}
             {% if CP_LB_IP is defined and CP_LB_IP | trim | length > 0 %}
             --set k8sServiceHost={{ CP_LB_IP }}.nip.io
             --set k8sServicePort=6443
@@ -666,9 +694,36 @@
           until: apply_result.rc == 0
           retries: 5
           delay: 30
+
+        - name: Create CiliumL2AnnouncementPolicy for default pool
+          copy:
+            dest: "{{ MANIFESTS_DIR }}/cilium-l2-policy.yaml"
+            content: |
+              apiVersion: cilium.io/v2alpha1
+              kind: CiliumL2AnnouncementPolicy
+              metadata:
+                name: default
+              spec:
+                interfaces:
+                  - ^eno[0-9]+
+                  - ^enp[0-9]+
+                  - ^ens[0-9]+
+                  - ^eth[0-9]+
+                loadBalancerIPs: true
+            mode: "0644"
+
+        - name: Apply CiliumL2AnnouncementPolicy for default pool
+          command: kubectl apply -f {{ MANIFESTS_DIR }}/cilium-l2-policy.yaml
+          environment:
+            KUBECONFIG: /etc/kubernetes/admin.conf
+          register: apply_l2_result
+          until: apply_l2_result.rc == 0
+          retries: 5
+          delay: 30
       when:
         - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
         - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
+        - CILIUM_LB_ENABLED | bool
         - LB_IP_RANGE_START | default("") | length > 0
         - LB_IP_RANGE_STOP | default("") | length > 0
 
@@ -767,6 +822,7 @@
       when:
         - WORKER_DATA is not defined or WORKER_DATA | trim | length == 0
         - CP_JOIN_DATA is not defined or CP_JOIN_DATA | trim | length == 0
+        - CILIUM_LB_ENABLED | bool
         - CP_LB_IP is defined and CP_LB_IP | trim | length > 0
 
     - name: Configure Addon Manager
@@ -917,6 +973,19 @@
           register: remove_taint
           changed_when: remove_taint.rc == 0
           failed_when: false
+
+        - name: Create .kube directory
+          file:
+            path: /root/.kube
+            state: directory
+            mode: "0755"
+
+        - name: Copy kubeconfig to .kube/config
+          copy:
+            src: /etc/kubernetes/admin.conf
+            dest: /root/.kube/config
+            remote_src: true
+            mode: "0600"
       when: CP_JOIN_DATA is defined and CP_JOIN_DATA | trim | length > 0
 
     - name: Reset Worker Node if needed
