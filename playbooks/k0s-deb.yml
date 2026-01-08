@@ -1,8 +1,8 @@
 # Copyright 2025 s3rj1k
 # SPDX-License-Identifier: MIT
 
-# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k0s-deb-crio.yml
-#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "ENABLE_DYNAMIC_CONFIG=true" playbooks/k0s-deb-crio.yml
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k0s-deb.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "ENABLE_DYNAMIC_CONFIG=true" playbooks/k0s-deb.yml
 
 ---
 - name: Kubernetes (k0s) on Debian/Ubuntu AMD64
