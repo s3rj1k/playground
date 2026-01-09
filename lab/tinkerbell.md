@@ -19,9 +19,11 @@ ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/lab.yml \
 create-vm 1 virbr0
 create-vm 2 virbr0
 create-vm 3 virbr0
+create-vm 4 virbr0
+create-vm 5 virbr0
 ```
 
-> **Note:** Script is installed by Ansible playbook
+> **Note:** Script is installed by Ansible playbook.
 
 ---
 
@@ -110,7 +112,7 @@ metadata:
   namespace: kro-system
 spec:
   name: vm2
-  role: worker
+  role: control-plane
   bmc:
     secretName: bmc-credentials
     host: 172.17.1.1
@@ -129,7 +131,7 @@ metadata:
   namespace: kro-system
 spec:
   name: vm3
-  role: worker
+  role: control-plane
   bmc:
     secretName: bmc-credentials
     host: 172.17.1.1
@@ -140,6 +142,44 @@ spec:
     ip: 172.17.1.203
     gateway: 172.17.1.1
     mac: "52:54:00:12:34:03"
+---
+apiVersion: kro.run/v1alpha1
+kind: TinkerbellNode
+metadata:
+  name: vm4
+  namespace: kro-system
+spec:
+  name: vm4
+  role: worker
+  bmc:
+    secretName: bmc-credentials
+    host: 172.17.1.1
+    port: 623
+    redfish:
+      port: 8000
+  network:
+    ip: 172.17.1.204
+    gateway: 172.17.1.1
+    mac: "52:54:00:12:34:04"
+---
+apiVersion: kro.run/v1alpha1
+kind: TinkerbellNode
+metadata:
+  name: vm5
+  namespace: kro-system
+spec:
+  name: vm5
+  role: worker
+  bmc:
+    secretName: bmc-credentials
+    host: 172.17.1.1
+    port: 623
+    redfish:
+      port: 8000
+  network:
+    ip: 172.17.1.205
+    gateway: 172.17.1.1
+    mac: "52:54:00:12:34:05"
 EOF
 ```
 
@@ -147,9 +187,7 @@ EOF
 
 ## Create Cluster
 
-### Traditional Kubeadm Cluster
-
-Control plane runs on nodes (uses kube-vip for HA).
+### Traditional Kubeadm Cluster (HA)
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -161,9 +199,9 @@ metadata:
 spec:
   name: capt
   controlPlaneEndpoint:
-    host: 172.17.1.201
+    host: 172.17.1.200
   controlPlane:
-    replicas: 1
+    replicas: 3
   workers:
     replicas: 1
   user:

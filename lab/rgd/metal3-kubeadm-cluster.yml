@@ -203,7 +203,7 @@ spec:
 
                   setup_kube_vip() {
                     mkdir -p /etc/kubernetes/manifests
-                    if command -v ctr >/dev/null 2>&1; then
+                    if command -v ctr >/dev/null 2>&1 && [ -S /run/containerd/containerd.sock ]; then
                       ctr image pull "$KVIMAGE"
                       ctr run --rm --net-host "$KVIMAGE" vip /kube-vip manifest pod \
                         --arp \

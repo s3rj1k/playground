@@ -751,18 +751,18 @@
 
           # Computed values
           VM_NAME="vm${VM_INDEX}"
-          DISK_PATH="/var/lib/libvirt/images/${VM_NAME}-disk.img"
+          DISK_PATH="/var/lib/libvirt/images/${VM_NAME}-disk.qcow2"
           DISK_SERIAL="vm-disk-$(printf "%03d" "$VM_INDEX")"
           MAC_ADDRESS="52:54:00:12:34:$(printf "%02x" "$VM_INDEX")"
 
           # Create VM
           virt-install \
               --name "$VM_NAME" \
-              --vcpus "6" \
+              --vcpus "4" \
               --ram "6144" \
               --os-variant "debian12" \
               --connect "qemu:///system" \
-              --disk "path=${DISK_PATH},bus=virtio,size=60,sparse=yes,serial=${DISK_SERIAL}" \
+              --disk "path=${DISK_PATH},bus=virtio,size=60,format=qcow2,discard=unmap,serial=${DISK_SERIAL}" \
               --disk "device=cdrom,bus=sata" \
               --network "bridge:${BRIDGE_NAME},mac=${MAC_ADDRESS}" \
               --console "pty,target.type=virtio" \

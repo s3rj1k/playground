@@ -124,13 +124,13 @@ parameters:
   flavor:
     type: string
     description: "Instance flavor"
-    default: "re.jenkins.master.xlarge"
+    default: "re.jenkins.slave.big"
     label: "Instance Flavor"
 
   volume_size:
     type: number
     description: "Size of root volume in GB"
-    default: 200
+    default: 500
     label: "Volume Size"
 
 resources:

@@ -55,7 +55,7 @@ spec:
               cidrBlocks:
                 - ${schema.spec.network.serviceCIDR}
           controlPlaneEndpoint:
-            host: ${schema.spec.controlPlaneEndpoint.host}
+            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
             port: ${schema.spec.controlPlaneEndpoint.port}
           controlPlaneRef:
             apiGroup: controlplane.cluster.x-k8s.io
@@ -76,7 +76,7 @@ spec:
           namespace: ${schema.spec.namespace}
         spec:
           controlPlaneEndpoint:
-            host: ${schema.spec.controlPlaneEndpoint.host}
+            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
             port: ${schema.spec.controlPlaneEndpoint.port}
           imageLookupBaseRegistry: ${schema.spec.image.registry}
           imageLookupFormat: "{{.BaseRegistry}}/{{.OSDistro}}-{{.OSVersion}}:{{.KubernetesVersion}}.gz"
@@ -147,6 +147,14 @@ spec:
           namespace: ${schema.spec.namespace}
         spec:
           kubeadmConfigSpec:
+            clusterConfiguration:
+              controlPlaneEndpoint: "${schema.spec.controlPlaneEndpoint.host}.nip.io:${string(schema.spec.controlPlaneEndpoint.port)}"
+              apiServer:
+                certSANs:
+                  - "${schema.spec.controlPlaneEndpoint.host}"
+                  - "${schema.spec.controlPlaneEndpoint.host}.nip.io"
+              featureGates:
+                ControlPlaneKubeletLocalMode: true
             initConfiguration:
               nodeRegistration:
                 kubeletExtraArgs:
@@ -159,23 +167,83 @@ spec:
                 kubeletExtraArgs:
                   - name: provider-id
                     value: PROVIDER_ID
+            files:
+              - path: /usr/local/bin/kube-vip-setup.sh
+                permissions: "0755"
+                content: |
+                  #!/bin/bash
+                  set -e
+
+                  PHASE="$1"
+                  KVVERSION="${schema.spec.kubeVip.version}"
+                  KVIMAGE="ghcr.io/kube-vip/kube-vip:$KVVERSION"
+                  VIP_ADDRESS="${schema.spec.controlPlaneEndpoint.host}"
+                  VIP_HOSTNAME="${schema.spec.controlPlaneEndpoint.host}.nip.io"
+                  KUBECONFIG_PATH="/etc/kubernetes/super-admin.conf"
+
+                  setup_hosts_hack() {
+                    if ! curl -sk --connect-timeout 2 "https://$VIP_HOSTNAME:6443/healthz" >/dev/null 2>&1; then
+                      echo "127.0.0.1 $VIP_HOSTNAME" >> /etc/hosts
+                    fi
+                  }
+
+                  remove_hosts_hack() {
+                    sed -i "/$VIP_HOSTNAME/d" /etc/hosts
+                  }
+
+                  generate_manifest() {
+                    "$1" manifest pod \
+                      --arp \
+                      --interface "" \
+                      --address "$VIP_ADDRESS" \
+                      --controlplane \
+                      --leaderElection \
+                      --k8sConfigPath "$KUBECONFIG_PATH"
+                  }
+
+                  setup_kube_vip() {
+                    mkdir -p /etc/kubernetes/manifests
+                    if command -v ctr >/dev/null 2>&1 && [ -S /run/containerd/containerd.sock ]; then
+                      ctr image pull "$KVIMAGE"
+                      ctr run --rm --net-host "$KVIMAGE" vip /kube-vip manifest pod \
+                        --arp \
+                        --interface "" \
+                        --address "$VIP_ADDRESS" \
+                        --controlplane \
+                        --leaderElection \
+                        --k8sConfigPath "$KUBECONFIG_PATH" \
+                        > /etc/kubernetes/manifests/kube-vip.yaml
+                    elif command -v crictl >/dev/null 2>&1; then
+                      crictl pull "$KVIMAGE" >/dev/null 2>&1
+                      KVBINARY=$(find /var/lib/containers/storage/overlay -name "kube-vip" -type f 2>/dev/null | head -1)
+                      if [ -z "$KVBINARY" ]; then
+                        echo "ERROR: kube-vip binary not found in container storage" >&2
+                        exit 1
+                      fi
+                      generate_manifest "$KVBINARY" > /etc/kubernetes/manifests/kube-vip.yaml
+                    else
+                      echo "ERROR: No supported container runtime found (ctr or crictl)" >&2
+                      exit 1
+                    fi
+                  }
+
+                  case "$PHASE" in
+                    pre)
+                      setup_hosts_hack
+                      setup_kube_vip
+                      ;;
+                    post)
+                      remove_hosts_hack
+                      ;;
+                    *)
+                      echo "Usage: $0 {pre|post}" >&2
+                      exit 1
+                      ;;
+                  esac
             preKubeadmCommands:
-              - |-
-                mkdir -p /etc/kubernetes/manifests
-                ctr images pull ghcr.io/kube-vip/kube-vip:${schema.spec.kubeVip.version}
-
-                DEFAULT_INTERFACE=$(ip -4 -j route list default | jq -r .[0].dev)
-
-                ctr run --rm --net-host \
-                  ghcr.io/kube-vip/kube-vip:${schema.spec.kubeVip.version} vip \
-                  /kube-vip manifest pod \
-                  --arp \
-                  --interface "" \
-                  --address "${schema.spec.controlPlaneEndpoint.host}" \
-                  --controlplane \
-                  --leaderElection \
-                  --k8sConfigPath /etc/kubernetes/super-admin.conf \
-                  > /etc/kubernetes/manifests/kube-vip.yaml
+              - /usr/local/bin/kube-vip-setup.sh pre
+            postKubeadmCommands:
+              - /usr/local/bin/kube-vip-setup.sh post
             users:
               - name: ${schema.spec.user.name}
                 passwd: ${schema.spec.user.passwordHash}

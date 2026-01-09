@@ -28,6 +28,8 @@ spec:
         name: string
         namespace: string | default=capi-system
         ip: string
+      traefik:
+        namespace: string | default=traefik-system
       kubevip:
         ipRange: string
       network:
@@ -77,9 +79,10 @@ spec:
             # Workaround for HCP bug: konnectivity-agent uses apiServerServicePort (443)
             # instead of konnectivityServicePort (8132). See PR:
             # https://github.com/teutonet/cluster-api-provider-hosted-control-plane/pull/73
-            - name: tls-passthrough-443
+            # Note: ports must match Traefik entrypoints (8443, 9443), not external ports (443, 6443)
+            - name: tls-passthrough-8443
               protocol: TLS
-              port: 443
+              port: 8443
               hostname: "*.${schema.spec.gateway.ip}.nip.io"
               tls:
                 mode: Passthrough
@@ -88,9 +91,9 @@ spec:
                   from: Same
                 kinds:
                   - kind: TLSRoute
-            - name: tls-passthrough-6443
+            - name: tls-passthrough-9443
               protocol: TLS
-              port: 6443
+              port: 9443
               hostname: "*.${schema.spec.gateway.ip}.nip.io"
               tls:
                 mode: Passthrough
@@ -109,7 +112,7 @@ spec:
         kind: Service
         metadata:
           name: hcp-gateway-${schema.spec.name}
-          namespace: kube-system
+          namespace: ${schema.spec.traefik.namespace}
           annotations:
             kube-vip.io/loadbalancerIPs: ${schema.spec.gateway.ip}
         spec:
