@@ -11,7 +11,7 @@
 #    - konnectivity.* on port 443 → s-<cluster>:8132 (fixes the bug)
 #    - <cluster>.* on port 443/6443 → s-<cluster>:443 (API server)
 #
-# Requires Traefik entrypoints: hcp (8132), hcpgw (443), hcplegacy (6443)
+# Requires Traefik entrypoints: hcp (8132), hcpgw (8443→443), hcplegacy (9443→6443)
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -31,7 +31,10 @@ spec:
       traefik:
         namespace: string | default=traefik-system
       kubevip:
-        ipRange: string
+        ipRange: string | default=""
+      ciliumLB:
+        ipRangeStart: string | default=""
+        ipRangeStop: string | default=""
       network:
         podCIDR: string | default=192.168.0.0/16
         serviceCIDR: string | default=172.26.0.0/16
@@ -115,6 +118,7 @@ spec:
           namespace: ${schema.spec.traefik.namespace}
           annotations:
             kube-vip.io/loadbalancerIPs: ${schema.spec.gateway.ip}
+            io.cilium/lb-ipam-ips: ${schema.spec.gateway.ip}
         spec:
           type: LoadBalancer
           selector:
@@ -156,6 +160,8 @@ spec:
 
     # Kube-vip IP pool ConfigMap
     - id: kubevipConfigMap
+      includeWhen:
+        - ${schema.spec.kubevip.ipRange != ""}
       template:
         apiVersion: v1
         kind: ConfigMap
@@ -164,6 +170,20 @@ spec:
           namespace: ${schema.spec.namespace}
         data:
           range-global: ${schema.spec.kubevip.ipRange}
+
+    # CiliumLoadBalancerIPPool for HCP when kube-vip is disabled
+    - id: ciliumLBIPPool
+      includeWhen:
+        - ${schema.spec.kubevip.ipRange == "" && schema.spec.ciliumLB.ipRangeStart != ""}
+      template:
+        apiVersion: cilium.io/v2
+        kind: CiliumLoadBalancerIPPool
+        metadata:
+          name: ${schema.spec.name}-hcp-pool
+        spec:
+          blocks:
+            - start: ${schema.spec.ciliumLB.ipRangeStart}
+              stop: ${schema.spec.ciliumLB.ipRangeStop}
 
     # Cluster
     - id: cluster

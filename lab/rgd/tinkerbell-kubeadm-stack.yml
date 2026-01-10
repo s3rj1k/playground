@@ -24,8 +24,8 @@ spec:
       tinkControllerMetricsAddr: string | default=0.0.0.0:8084
       osiePort: integer | default=7171
       kubevip:
-        enabled: boolean | default=true
-        lbEnable: boolean | default=true
+        enabled: boolean | default=false
+        lbEnable: boolean | default=false
       hostedControlPlane:
         enabled: boolean | default=false
     status:

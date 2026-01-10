@@ -48,10 +48,10 @@ parameters:
     label: "Install Kite"
     default: true
 
-  traefik_hcp_mode:
+  hcp_mode:
     type: boolean
-    description: "Configure Traefik for HCP (Hosted Control Plane)"
-    label: "Traefik HCP Mode"
+    description: "Enable Hosted Control Plane mode (configures Traefik gateway, Cilium bridge settings)"
+    label: "HCP Mode"
     default: false
 
   cilium_lb_enabled:
@@ -305,7 +305,8 @@ resources:
                   -e "SUSHY_HACKS=%sushy_hacks%" \
                   -e "INSTALL_ZOT=%install_zot%" \
                   -e "INSTALL_KITE=%install_kite%" \
-                  -e "TRAEFIK_HCP_MODE=%traefik_hcp_mode%" \
+                  -e "HCP_MODE=%hcp_mode%" \
+                  -e "CILIUM_BRIDGE_HACKS=%hcp_mode%" \
                   -e "CILIUM_LB_ENABLED=%cilium_lb_enabled%" \
                   -e "LB_IP_RANGE_START=%lb_ip%" \
                   -e "LB_IP_RANGE_STOP=%lb_ip%" \
@@ -333,8 +334,8 @@ resources:
               get_param: install_zot
             "%install_kite%":
               get_param: install_kite
-            "%traefik_hcp_mode%":
-              get_param: traefik_hcp_mode
+            "%hcp_mode%":
+              get_param: hcp_mode
             "%cilium_lb_enabled%":
               get_param: cilium_lb_enabled
             "%lb_ip%":

@@ -20,7 +20,7 @@
     INSTALL_KRO: true
     INSTALL_KITE: true
     INSTALL_TRAEFIK: true
-    TRAEFIK_HCP_MODE: false
+    HCP_MODE: false
     CILIUM_LB_ENABLED: true
     INSTALL_OPENEBS: true
     INSTALL_LOCAL_PATH_PROVISIONER: false
@@ -221,7 +221,11 @@
                     enabled: true
                     experimentalChannel: true
                 gateway:
+            {% if HCP_MODE | bool %}
+                  enabled: false
+            {% else %}
                   enabled: true
+            {% endif %}
             {% if CILIUM_LB_ENABLED | bool %}
                 service:
                   loadBalancerClass: io.cilium/l2-announcer
@@ -235,18 +239,19 @@
                 ports:
                   web:
                     expose:
-            {% if TRAEFIK_HCP_MODE | bool %}
+            {% if HCP_MODE | bool %}
                       default: false
             {% else %}
                       default: true
             {% endif %}
                   websecure:
-            {% if TRAEFIK_HCP_MODE | bool %}
-                    port: 18443
+            {% if HCP_MODE | bool %}
+                    port: 8843
+            {% endif %}
                     expose:
+            {% if HCP_MODE | bool %}
                       default: false
             {% else %}
-                    expose:
                       default: true
             {% endif %}
                     tls:
@@ -256,7 +261,7 @@
                     expose:
                       default: false
                     protocol: TCP
-            {% if TRAEFIK_HCP_MODE | bool %}
+            {% if HCP_MODE | bool %}
                   hcp:
                     port: 8132
                     expose:
@@ -265,6 +270,7 @@
                     protocol: TCP
                   hcpgw:
                     port: 8443
+                    containerPort: 8443
                     expose:
                       default: true
                     exposedPort: 443

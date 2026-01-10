@@ -12,7 +12,8 @@
   ignore_errors: false
 
   vars:
-    sushy_hacks: "{{ SUSHY_HACKS | default(true) }}"
+    sushy_hacks: "{{ SUSHY_HACKS | default(false) }}"
+    cilium_bridge_hacks: "{{ CILIUM_BRIDGE_HACKS | default(false) }}"
     provisioning_network:
       name: default
       bridge: virbr0
@@ -121,7 +122,7 @@
 
         - name: Persist required kernel modules
           copy:
-            dest: /etc/modules-load.d/99-local.conf
+            dest: /etc/modules-load.d/95-local.conf
             content: |
               overlay
               br_netfilter
@@ -129,6 +130,27 @@
               kvm_intel
               kvm_amd
             mode: "0644"
+
+    # Disable bridge-nf-call-iptables for Cilium LoadBalancer/NodePort compatibility with libvirt bridges.
+    # When br_netfilter is loaded, bridged traffic passes through iptables which interferes with
+    # Cilium's BPF-based load balancing. This is required when VMs on libvirt bridges need to
+    # access Cilium LoadBalancer or NodePort services (e.g., HCP worker nodes reaching API server).
+    - name: Configure bridge netfilter for Cilium compatibility
+      when: cilium_bridge_hacks | bool
+      block:
+        - name: Disable bridge-nf-call-iptables for Cilium LB
+          sysctl:
+            name: net.bridge.bridge-nf-call-iptables
+            value: "0"
+            sysctl_file: /etc/sysctl.d/99-cilium-bridge.conf
+            reload: yes
+
+        - name: Disable bridge-nf-call-ip6tables for Cilium LB
+          sysctl:
+            name: net.bridge.bridge-nf-call-ip6tables
+            value: "0"
+            sysctl_file: /etc/sysctl.d/99-cilium-bridge.conf
+            reload: yes
 
     - name: Configure libvirt
       block:

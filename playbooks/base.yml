@@ -255,7 +255,7 @@
 
         - name: Persist required kernel modules
           copy:
-            dest: /etc/modules-load.d/99-local.conf
+            dest: /etc/modules-load.d/95-local.conf
             content: |
               overlay
               br_netfilter
@@ -263,7 +263,7 @@
 
         - name: Configure kernel parameters
           copy:
-            dest: /etc/sysctl.d/99-local.conf
+            dest: /etc/sysctl.d/95-local.conf
             content: |
               fs.inotify.max_user_instances = 8192
               fs.inotify.max_user_watches = 524288

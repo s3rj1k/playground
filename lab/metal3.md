@@ -73,7 +73,7 @@ spec:
     dhcp:
       networkCIDR: "172.17.1.0/24"
       rangeBegin: "172.17.1.100"
-      rangeEnd: "172.17.1.200"
+      rangeEnd: "172.17.1.199"
       gatewayAddress: "172.17.1.1"
       serveDNS: true
   deployRamdisk:

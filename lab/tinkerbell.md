@@ -4,12 +4,15 @@
 
 ```bash
 ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/lab.yml \
-  -e "CILIUM_LB_ENABLED=false" \
-  -e "TRAEFIK_HCP_MODE=true" \
-  -e "SUSHY_HACKS=true"
+  -e "HCP_MODE=true" \
+  -e "SUSHY_HACKS=true" \
+  -e "CILIUM_BRIDGE_HACKS=true"
 ```
 
-> **Note:** Use Debian/Ubuntu AMD64 VM
+> **Note:** Use Debian/Ubuntu AMD64 VM.
+>
+> **Note:** `CILIUM_BRIDGE_HACKS=true` disables `bridge-nf-call-iptables` which is required
+> for VMs on libvirt bridges to reach Cilium LoadBalancer services (e.g., HCP API server).
 
 ---
 
@@ -56,12 +59,7 @@ spec:
     addonHelm: v0.5.3
     tinkerbellProvider: v0.6.8
     tinkerbellChart: v0.22.0
-    kubeVip: v1.0.3
-    kubeVipCloudProvider: "0.2.9"
     hostedControlPlane: v1.5.0
-  kubevip:
-    enabled: true
-    lbEnable: true
   hostedControlPlane:
     enabled: true
   # isoURL: https://github.com/tinkerbell/hook/releases/download/latest/hook-x86_64-efi-initrd.iso
@@ -230,9 +228,10 @@ spec:
   gateway:
     name: hcp
     namespace: capi-system
-    ip: "172.17.1.210"
-  kubevip:
-    ipRange: "172.17.1.210-172.17.1.250"
+    ip: "172.17.1.225"
+  ciliumLB:
+    ipRangeStart: "172.17.1.225"
+    ipRangeStop: "172.17.1.250"
   controlPlane:
     replicas: 1
   workers:

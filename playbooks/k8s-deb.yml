@@ -58,6 +58,7 @@
     MANIFESTS_DIR: "/etc/kubernetes/manifests.d"
     ENABLE_FLUX_CD: true
     CILIUM_LB_ENABLED: true
+    CILIUM_DEVICES: "ens+ eth+ virbr+"
 
   pre_tasks:
     - name: Check if system is supported
@@ -226,7 +227,7 @@
 
         - name: Persist required kernel modules
           copy:
-            dest: /etc/modules-load.d/99-local.conf
+            dest: /etc/modules-load.d/95-local.conf
             content: |
               overlay
               br_netfilter
@@ -234,7 +235,7 @@
 
         - name: Configure kernel parameters
           copy:
-            dest: /etc/sysctl.d/99-local.conf
+            dest: /etc/sysctl.d/95-local.conf
             content: |
               fs.inotify.max_user_instances = 8192
               fs.inotify.max_user_watches = 524288
@@ -638,6 +639,7 @@
             {% endif %}
             --set k8sClientRateLimit.qps=10
             --set k8sClientRateLimit.burst=30
+            --set devices='{{ CILIUM_DEVICES }}'
             --set ipam.operator.clusterPoolIPv4PodCIDRList={{ CLUSTER_CIDR }}
             {% if CP_LB_IP is defined and CP_LB_IP | trim | length > 0 %}
             --set k8sServiceHost={{ CP_LB_IP }}.nip.io
@@ -709,6 +711,7 @@
                   - ^enp[0-9]+
                   - ^ens[0-9]+
                   - ^eth[0-9]+
+                  - ^virbr[0-9]+
                 loadBalancerIPs: true
             mode: "0644"
 
@@ -773,6 +776,7 @@
                   - ^enp[0-9]+
                   - ^ens[0-9]+
                   - ^eth[0-9]+
+                  - ^virbr[0-9]+
                 loadBalancerIPs: true
             mode: "0644"
 
