@@ -229,11 +229,21 @@ spec:
 
                   case "$PHASE" in
                     pre)
-                      setup_hosts_hack
-                      setup_kube_vip
+                      if ! curl -sk --connect-timeout 2 "https://$VIP_HOSTNAME:6443/healthz" >/dev/null 2>&1; then
+                        # First node - VIP not reachable, need hosts hack and kube-vip
+                        setup_hosts_hack
+                        setup_kube_vip
+                      fi
                       ;;
                     post)
-                      remove_hosts_hack
+                      if curl -sk --connect-timeout 2 "https://$VIP_HOSTNAME:6443/healthz" >/dev/null 2>&1; then
+                        # Joining node - VIP reachable, setup kube-vip now with admin.conf
+                        KUBECONFIG_PATH="/etc/kubernetes/admin.conf"
+                        setup_kube_vip
+                      else
+                        # First node - remove hosts hack
+                        remove_hosts_hack
+                      fi
                       ;;
                     *)
                       echo "Usage: $0 {pre|post}" >&2
