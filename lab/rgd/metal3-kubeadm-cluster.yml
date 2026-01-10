@@ -8,7 +8,6 @@ spec:
     kind: Metal3KubeadmCluster
     spec:
       name: string
-      namespace: string | default=baremetal-operator-system
       kubernetesVersion: string | default=v1.35.0
       controlPlaneEndpoint:
         host: string
@@ -47,7 +46,7 @@ spec:
         kind: Cluster
         metadata:
           name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
           labels:
             cluster.x-k8s.io/cluster-name: ${schema.spec.name}
             cni: cilium
@@ -78,7 +77,7 @@ spec:
         kind: Metal3Cluster
         metadata:
           name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           controlPlaneEndpoint:
             host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
@@ -92,7 +91,7 @@ spec:
         kind: HelmChartProxy
         metadata:
           name: cilium-${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           clusterSelector:
             matchLabels:
@@ -146,7 +145,7 @@ spec:
         kind: KubeadmControlPlane
         metadata:
           name: ${schema.spec.name}-control-plane
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           kubeadmConfigSpec:
             clusterConfiguration:
@@ -275,7 +274,7 @@ spec:
         kind: Metal3DataTemplate
         metadata:
           name: ${schema.spec.name}-control-plane
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           clusterName: ${schema.spec.name}
           metaData:
@@ -294,7 +293,7 @@ spec:
         kind: Metal3MachineTemplate
         metadata:
           name: ${schema.spec.name}-control-plane
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           template:
             spec:
@@ -316,7 +315,7 @@ spec:
         kind: Metal3DataTemplate
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           clusterName: ${schema.spec.name}
           metaData:
@@ -335,7 +334,7 @@ spec:
         kind: Metal3MachineTemplate
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           template:
             spec:
@@ -357,7 +356,7 @@ spec:
         kind: KubeadmConfigTemplate
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           template:
             spec:
@@ -380,7 +379,7 @@ spec:
         kind: MachineDeployment
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
           labels:
             cluster.x-k8s.io/cluster-name: ${cluster.metadata.name}
             nodepool: worker-pool

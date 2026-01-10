@@ -121,7 +121,7 @@
               namespace: flux-system
             spec:
               interval: 1h
-              targetNamespace: cert-manager
+              targetNamespace: cert-manager-system
               chart:
                 spec:
                   chart: cert-manager
@@ -147,7 +147,7 @@
 
         - name: Wait for cert-manager to be ready
           shell: |
-            kubectl --kubeconfig={{ KUBECONFIG }} -n cert-manager wait --for=condition=Available deployment --all --timeout=300s
+            kubectl --kubeconfig={{ KUBECONFIG }} -n cert-manager-system wait --for=condition=Available deployment --all --timeout=300s
           args:
             executable: /bin/bash
           register: cert_manager_ready
@@ -299,7 +299,7 @@
               namespace: flux-system
             spec:
               interval: 1h
-              targetNamespace: openebs
+              targetNamespace: openebs-system
               chart:
                 spec:
                   chart: openebs

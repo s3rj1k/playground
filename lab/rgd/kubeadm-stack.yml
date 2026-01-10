@@ -1,0 +1,70 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: kubeadmstack.v1alpha1.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: KubeadmStack
+    spec:
+      # Version Configuration
+      versions:
+        clusterAPI: string | default=v1.12.1
+        addonHelm: string | default=v0.5.3
+    status:
+      coreProviderReady: ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      addonProviderReady: ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      bootstrapProviderReady: ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      controlPlaneProviderReady: ${controlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+  resources:
+    # Cluster API Core Provider
+    - id: coreProvider
+      readyWhen:
+        - ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: CoreProvider
+        metadata:
+          name: cluster-api
+          namespace: ${schema.metadata.namespace}
+        spec:
+          version: ${schema.spec.versions.clusterAPI}
+
+    # Addon Provider (Helm)
+    - id: addonProvider
+      readyWhen:
+        - ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: AddonProvider
+        metadata:
+          name: helm
+          namespace: ${schema.metadata.namespace}
+        spec:
+          version: ${schema.spec.versions.addonHelm}
+
+    # Bootstrap Provider (Kubeadm)
+    - id: bootstrapProvider
+      readyWhen:
+        - ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: BootstrapProvider
+        metadata:
+          name: kubeadm
+          namespace: ${schema.metadata.namespace}
+        spec:
+          version: ${schema.spec.versions.clusterAPI}
+
+    # Control Plane Provider (Kubeadm)
+    - id: controlPlaneProvider
+      readyWhen:
+        - ${controlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: ControlPlaneProvider
+        metadata:
+          name: kubeadm
+          namespace: ${schema.metadata.namespace}
+        spec:
+          version: ${schema.spec.versions.clusterAPI}

@@ -7,15 +7,12 @@ spec:
     apiVersion: v1alpha1
     kind: Metal3KubeadmStack
     spec:
-      namespace: string | default=capi-system
       # Version Configuration
       versions:
-        clusterAPI: string | default=v1.12.1
         capm3Provider: string | default=v1.12.0
         ipamProvider: string | default=v1.12.0
         irso: string | default=v0.7.0
         bmo: string | default=v0.12.0
-        addonHelm: string | default=v0.5.3
       # Feature Flags
       irso:
         enabled: boolean | default=true
@@ -24,10 +21,6 @@ spec:
       ipam:
         enabled: boolean | default=true
     status:
-      coreProviderReady: ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      addonProviderReady: ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      bootstrapProviderReady: ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      controlPlaneProviderReady: ${controlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       infrastructureProviderReady: ${infrastructureProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       irsoCrdsReady: ${irsoCrds.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       irsoReady: ${irsoKustomization.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
@@ -35,74 +28,6 @@ spec:
       bmoReady: ${bmoKustomization.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       ipamProviderReady: ${ipamProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
   resources:
-    # Namespace for CAPI components
-    - id: capiNamespace
-      template:
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: ${schema.spec.namespace}
-
-    # Namespace for BMO/Ironic
-    - id: bmoNamespace
-      template:
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: baremetal-operator-system
-
-    # Cluster API Core Provider
-    - id: coreProvider
-      readyWhen:
-        - ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      template:
-        apiVersion: operator.cluster.x-k8s.io/v1alpha2
-        kind: CoreProvider
-        metadata:
-          name: cluster-api
-          namespace: ${capiNamespace.metadata.name}
-        spec:
-          version: ${schema.spec.versions.clusterAPI}
-
-    # Addon Provider (Helm)
-    - id: addonProvider
-      readyWhen:
-        - ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      template:
-        apiVersion: operator.cluster.x-k8s.io/v1alpha2
-        kind: AddonProvider
-        metadata:
-          name: helm
-          namespace: ${capiNamespace.metadata.name}
-        spec:
-          version: ${schema.spec.versions.addonHelm}
-
-    # Bootstrap Provider (Kubeadm)
-    - id: bootstrapProvider
-      readyWhen:
-        - ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      template:
-        apiVersion: operator.cluster.x-k8s.io/v1alpha2
-        kind: BootstrapProvider
-        metadata:
-          name: kubeadm
-          namespace: ${capiNamespace.metadata.name}
-        spec:
-          version: ${schema.spec.versions.clusterAPI}
-
-    # Control Plane Provider (Kubeadm)
-    - id: controlPlaneProvider
-      readyWhen:
-        - ${controlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      template:
-        apiVersion: operator.cluster.x-k8s.io/v1alpha2
-        kind: ControlPlaneProvider
-        metadata:
-          name: kubeadm
-          namespace: ${capiNamespace.metadata.name}
-        spec:
-          version: ${schema.spec.versions.clusterAPI}
-
     # IRSO GitRepository source
     - id: irsoGitRepository
       includeWhen:
@@ -112,7 +37,7 @@ spec:
         kind: GitRepository
         metadata:
           name: ironic-standalone-operator
-          namespace: ${bmoNamespace.metadata.name}
+          namespace: ${schema.metadata.namespace}
         spec:
           interval: 10m
           url: https://github.com/metal3-io/ironic-standalone-operator
@@ -130,7 +55,7 @@ spec:
         kind: Kustomization
         metadata:
           name: ironic-standalone-operator-crds
-          namespace: ${bmoNamespace.metadata.name}
+          namespace: ${schema.metadata.namespace}
         spec:
           interval: 10m
           sourceRef:
@@ -152,7 +77,7 @@ spec:
         kind: Kustomization
         metadata:
           name: ironic-standalone-operator
-          namespace: ${bmoNamespace.metadata.name}
+          namespace: ${schema.metadata.namespace}
         spec:
           interval: 10m
           dependsOn:
@@ -162,7 +87,7 @@ spec:
             name: ${irsoGitRepository.metadata.name}
           path: ./config/default
           prune: true
-          targetNamespace: ${bmoNamespace.metadata.name}
+          targetNamespace: ${schema.metadata.namespace}
           wait: true
           timeout: 5m
 
@@ -175,7 +100,7 @@ spec:
         kind: GitRepository
         metadata:
           name: baremetal-operator
-          namespace: ${bmoNamespace.metadata.name}
+          namespace: ${schema.metadata.namespace}
         spec:
           interval: 10m
           url: https://github.com/metal3-io/baremetal-operator
@@ -193,7 +118,7 @@ spec:
         kind: Kustomization
         metadata:
           name: baremetal-operator-crds
-          namespace: ${bmoNamespace.metadata.name}
+          namespace: ${schema.metadata.namespace}
         spec:
           interval: 10m
           sourceRef:
@@ -215,7 +140,7 @@ spec:
         kind: Kustomization
         metadata:
           name: baremetal-operator
-          namespace: ${bmoNamespace.metadata.name}
+          namespace: ${schema.metadata.namespace}
         spec:
           interval: 10m
           dependsOn:
@@ -225,9 +150,26 @@ spec:
             name: ${bmoGitRepository.metadata.name}
           path: ./config/overlays/basic-auth_tls
           prune: true
-          targetNamespace: ${bmoNamespace.metadata.name}
+          targetNamespace: ${schema.metadata.namespace}
           wait: true
           timeout: 5m
+          patches:
+            - target:
+                kind: Certificate
+                name: baremetal-operator-serving-cert
+              patch: |
+                - op: replace
+                  path: /spec/dnsNames
+                  value:
+                    - baremetal-operator-webhook-service.${schema.metadata.namespace}.svc
+                    - baremetal-operator-webhook-service.${schema.metadata.namespace}.svc.cluster.local
+            - target:
+                kind: ValidatingWebhookConfiguration
+                name: baremetal-operator-validating-webhook-configuration
+              patch: |
+                - op: replace
+                  path: /metadata/annotations/cert-manager.io~1inject-ca-from
+                  value: ${schema.metadata.namespace}/baremetal-operator-serving-cert
 
     # Metal3 Infrastructure Provider
     - id: infrastructureProvider
@@ -238,7 +180,7 @@ spec:
         kind: InfrastructureProvider
         metadata:
           name: metal3
-          namespace: ${capiNamespace.metadata.name}
+          namespace: ${schema.metadata.namespace}
         spec:
           version: ${schema.spec.versions.capm3Provider}
           fetchConfig:
@@ -255,7 +197,7 @@ spec:
         kind: IPAMProvider
         metadata:
           name: metal3
-          namespace: ${capiNamespace.metadata.name}
+          namespace: ${schema.metadata.namespace}
         spec:
           version: ${schema.spec.versions.ipamProvider}
           fetchConfig:

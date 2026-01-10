@@ -7,7 +7,6 @@ spec:
     apiVersion: v1alpha1
     kind: Metal3Ironic
     spec:
-      namespace: string | default=baremetal-operator-system
       # Credentials - reference to user-managed source secret
       credentialsSourceSecretName: string | default=ironic-credentials-source
       # Networking
@@ -32,6 +31,12 @@ spec:
       deployRamdisk:
         sshKey: string | default=""
         extraKernelParams: string | default=""
+        disableDownloader: boolean | default=false
+      # Generic file downloader (init container using aria2c)
+      downloader:
+        enabled: boolean | default=false
+        image: string | default=snowdreamtech/aria2:latest
+        config: string | default=""
       # Prometheus
       prometheusExporter:
         enabled: boolean | default=false
@@ -40,7 +45,7 @@ spec:
         concurrency: integer | default=4
         provisioningLimit: integer | default=20
     status:
-      ironicReady: ${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      ironicReady: '${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True") || ironicWithDownloader.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}'
   resources:
     # Ironic ConfigMap for BMO (endpoint configuration)
     - id: ironicConfigMap
@@ -49,9 +54,9 @@ spec:
         kind: ConfigMap
         metadata:
           name: ironic
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         data:
-          IRONIC_ENDPOINT: https://ironic.${schema.spec.namespace}.svc:443/v1
+          IRONIC_ENDPOINT: https://ironic.${schema.metadata.namespace}.svc:443/v1
           BMO_CONCURRENCY: ${string(schema.spec.bmo.concurrency)}
           PROVISIONING_LIMIT: ${string(schema.spec.bmo.provisioningLimit)}
 
@@ -62,7 +67,7 @@ spec:
         kind: Secret
         metadata:
           name: ${schema.spec.credentialsSourceSecretName}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
 
     # KRO-managed credentials secret (copy from source)
     - id: ironicCredentials
@@ -71,7 +76,7 @@ spec:
         kind: Secret
         metadata:
           name: ironic-credentials
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         type: Opaque
         data:
           username: "${credentialsSource.data.username}"
@@ -86,7 +91,7 @@ spec:
         kind: Issuer
         metadata:
           name: ironic-selfsigned
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           selfSigned: {}
 
@@ -99,7 +104,7 @@ spec:
         kind: Certificate
         metadata:
           name: ironic-ca
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           secretName: ironic-cacert
           duration: 87600h
@@ -119,7 +124,7 @@ spec:
         kind: Issuer
         metadata:
           name: ironic-ca-issuer
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           ca:
             secretName: ${caCertificate.spec.secretName}
@@ -133,7 +138,7 @@ spec:
         kind: Certificate
         metadata:
           name: ironic-tls
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           secretName: ironic-tls
           duration: 87600h
@@ -141,17 +146,19 @@ spec:
           commonName: ironic
           dnsNames:
             - ironic
-            - ironic.${schema.spec.namespace}
-            - ironic.${schema.spec.namespace}.svc
-            - ironic.${schema.spec.namespace}.svc.cluster.local
+            - ironic.${schema.metadata.namespace}
+            - ironic.${schema.metadata.namespace}.svc
+            - ironic.${schema.metadata.namespace}.svc.cluster.local
           ipAddresses:
             - ${schema.spec.networking.ipAddress}
           issuerRef:
             name: ${caIssuer.metadata.name}
             kind: Issuer
 
-    # Ironic instance
+    # Ironic instance (without custom downloader)
     - id: ironic
+      includeWhen:
+        - ${!schema.spec.downloader.enabled}
       readyWhen:
         - ${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       template:
@@ -159,7 +166,7 @@ spec:
         kind: Ironic
         metadata:
           name: ironic
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           apiCredentialsName: ${ironicCredentials.metadata.name}
           tls:
@@ -168,6 +175,7 @@ spec:
           deployRamdisk:
             sshKey: ${schema.spec.deployRamdisk.sshKey}
             extraKernelParams: ${schema.spec.deployRamdisk.extraKernelParams}
+            disableDownloader: ${schema.spec.deployRamdisk.disableDownloader}
           prometheusExporter:
             enabled: ${schema.spec.prometheusExporter.enabled}
           networking:
@@ -183,3 +191,66 @@ spec:
               dnsAddress: ${schema.spec.networking.dhcp.dnsAddress}
               gatewayAddress: ${schema.spec.networking.dhcp.gatewayAddress}
               serveDNS: ${schema.spec.networking.dhcp.serveDNS}
+
+    # Ironic instance (with custom downloader init container)
+    - id: ironicWithDownloader
+      includeWhen:
+        - ${schema.spec.downloader.enabled}
+      readyWhen:
+        - ${ironicWithDownloader.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: ironic.metal3.io/v1alpha1
+        kind: Ironic
+        metadata:
+          name: ironic
+          namespace: ${schema.metadata.namespace}
+        spec:
+          apiCredentialsName: ${ironicCredentials.metadata.name}
+          tls:
+            certificateName: ironic-tls
+            disableVirtualMediaTLS: ${schema.spec.tls.disableVirtualMediaTLS}
+          deployRamdisk:
+            sshKey: ${schema.spec.deployRamdisk.sshKey}
+            extraKernelParams: ${schema.spec.deployRamdisk.extraKernelParams}
+            disableDownloader: ${schema.spec.deployRamdisk.disableDownloader}
+          prometheusExporter:
+            enabled: ${schema.spec.prometheusExporter.enabled}
+          networking:
+            interface: ${schema.spec.networking.interface}
+            ipAddress: ${schema.spec.networking.ipAddress}
+            externalIP: ${schema.spec.networking.externalIP}
+            imageServerPort: ${schema.spec.networking.imageServerPort}
+            imageServerTLSPort: ${schema.spec.networking.imageServerTLSPort}
+            dhcp:
+              networkCIDR: ${schema.spec.networking.dhcp.networkCIDR}
+              rangeBegin: ${schema.spec.networking.dhcp.rangeBegin}
+              rangeEnd: ${schema.spec.networking.dhcp.rangeEnd}
+              dnsAddress: ${schema.spec.networking.dhcp.dnsAddress}
+              gatewayAddress: ${schema.spec.networking.dhcp.gatewayAddress}
+              serveDNS: ${schema.spec.networking.dhcp.serveDNS}
+          overrides:
+            initContainers:
+              - name: file-downloader
+                image: ${schema.spec.downloader.image}
+                securityContext:
+                  runAsUser: 997
+                  runAsGroup: 994
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    mkdir -p /shared/html/images
+                    cat > /tmp/input.txt << 'ARIA2EOF'
+                    ${schema.spec.downloader.config}
+                    ARIA2EOF
+                    aria2c \
+                      --input-file=/tmp/input.txt \
+                      --dir=/shared/html/images \
+                      --check-integrity=true \
+                      --continue=true \
+                      --max-connection-per-server=4 \
+                      --min-split-size=5M \
+                      --console-log-level=notice
+                volumeMounts:
+                  - name: ironic-shared
+                    mountPath: /shared

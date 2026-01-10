@@ -27,6 +27,7 @@ create-vm 5 virbr0
 ## Install ResourceGraphDefinitions
 
 ```bash
+kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/kubeadm-stack.yml
 kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/metal3-kubeadm-stack.yml
 kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/metal3-ironic.yml
 kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/metal3-kubeadm-cluster.yml
@@ -39,14 +40,22 @@ kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/
 > **Note:** The `ironic-credentials-source` secret is user-managed and referenced by KRO to create a managed copy. This ensures credentials persist across Ironic CR recreations.
 
 ```bash
-kubectl create namespace baremetal-operator-system || true
+kubectl create namespace capi-system || true
+kubectl create namespace metal3-system || true
 
 kubectl apply -f - <<'EOF'
+apiVersion: kro.run/v1alpha1
+kind: KubeadmStack
+metadata:
+  name: capi
+  namespace: capi-system
+spec: {}
+---
 apiVersion: v1
 kind: Secret
 metadata:
   name: ironic-credentials-source
-  namespace: baremetal-operator-system
+  namespace: metal3-system
 type: Opaque
 stringData:
   username: admin
@@ -56,7 +65,7 @@ apiVersion: kro.run/v1alpha1
 kind: Metal3KubeadmStack
 metadata:
   name: metal3
-  namespace: kro-system
+  namespace: metal3-system
 spec: {}
 EOF
 
@@ -65,7 +74,7 @@ apiVersion: kro.run/v1alpha1
 kind: Metal3Ironic
 metadata:
   name: ironic
-  namespace: kro-system
+  namespace: metal3-system
 spec:
   networking:
     ipAddress: "172.17.1.1"
@@ -77,12 +86,24 @@ spec:
       gatewayAddress: "172.17.1.1"
       serveDNS: true
   deployRamdisk:
+    disableDownloader: true
     sshKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLrIiGjB4nPsyKzgzY21asVi/HKlveRnNY77vOhRhOA"
+  downloader:
+    enabled: true
+    image: snowdreamtech/aria2:latest
+    config: |
+      https://s3rj1k.github.io/ironic-python-agent/ipa-amd64.kernel
+        out=ironic-python-agent.kernel
+        checksum=sha-256=560468155601807c27080040518c6ccbc3bd932bb3df917d7829d5d848488861
+      https://s3rj1k.github.io/ironic-python-agent/ipa-amd64.initramfs
+        out=ironic-python-agent.initramfs
+        checksum=sha-256=5bdaf83d4c82e68d4780be75581b21a02c6cde73c278cd586b52e55ce9016800
 EOF
 do echo "Waiting for Metal3Ironic CRD..."; sleep 5; done
 
-kubectl wait metal3kubeadmstack/metal3 -n kro-system --for=condition=Ready --timeout=10m
-kubectl wait metal3ironic/ironic -n kro-system --for=condition=Ready --timeout=10m
+kubectl wait kubeadmstack/capi -n capi-system --for=condition=Ready --timeout=10m
+kubectl wait metal3kubeadmstack/metal3 -n metal3-system --for=condition=Ready --timeout=10m
+kubectl wait metal3ironic/ironic -n metal3-system --for=condition=Ready --timeout=10m
 ```
 
 ---
@@ -95,7 +116,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: vm1-bmc
-  namespace: baremetal-operator-system
+  namespace: metal3-system
 type: Opaque
 stringData:
   username: admin
@@ -105,7 +126,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: vm2-bmc
-  namespace: baremetal-operator-system
+  namespace: metal3-system
 type: Opaque
 stringData:
   username: admin
@@ -115,7 +136,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: vm3-bmc
-  namespace: baremetal-operator-system
+  namespace: metal3-system
 type: Opaque
 stringData:
   username: admin
@@ -125,7 +146,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: vm4-bmc
-  namespace: baremetal-operator-system
+  namespace: metal3-system
 type: Opaque
 stringData:
   username: admin
@@ -135,7 +156,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: vm5-bmc
-  namespace: baremetal-operator-system
+  namespace: metal3-system
 type: Opaque
 stringData:
   username: admin
@@ -145,7 +166,7 @@ apiVersion: metal3.io/v1alpha1
 kind: BareMetalHost
 metadata:
   name: vm1
-  namespace: baremetal-operator-system
+  namespace: metal3-system
   labels:
     cluster.x-k8s.io/control-plane: capm3-demo
 spec:
@@ -164,7 +185,7 @@ apiVersion: metal3.io/v1alpha1
 kind: BareMetalHost
 metadata:
   name: vm2
-  namespace: baremetal-operator-system
+  namespace: metal3-system
   labels:
     cluster.x-k8s.io/control-plane: capm3-demo
 spec:
@@ -183,7 +204,7 @@ apiVersion: metal3.io/v1alpha1
 kind: BareMetalHost
 metadata:
   name: vm3
-  namespace: baremetal-operator-system
+  namespace: metal3-system
   labels:
     cluster.x-k8s.io/control-plane: capm3-demo
 spec:
@@ -202,7 +223,7 @@ apiVersion: metal3.io/v1alpha1
 kind: BareMetalHost
 metadata:
   name: vm4
-  namespace: baremetal-operator-system
+  namespace: metal3-system
   labels:
     cluster.x-k8s.io/worker: capm3-demo
 spec:
@@ -221,7 +242,7 @@ apiVersion: metal3.io/v1alpha1
 kind: BareMetalHost
 metadata:
   name: vm5
-  namespace: baremetal-operator-system
+  namespace: metal3-system
   labels:
     cluster.x-k8s.io/worker: capm3-demo
 spec:
@@ -250,10 +271,9 @@ apiVersion: kro.run/v1alpha1
 kind: Metal3KubeadmCluster
 metadata:
   name: capm3-demo
-  namespace: kro-system
+  namespace: metal3-system
 spec:
   name: capm3-demo
-  namespace: baremetal-operator-system
   kubernetesVersion: v1.35.0
   controlPlaneEndpoint:
     host: 172.17.1.200
@@ -286,7 +306,7 @@ EOF
 
 ```bash
 kubectl get rgd
-kubectl get metal3kubeadmstack,metal3ironic -A
+kubectl get kubeadmstack,metal3kubeadmstack,metal3ironic -A
 kubectl get coreprovider,bootstrapprovider,controlplaneprovider,infrastructureprovider,ipamprovider -A
 kubectl get ironic -A
 kubectl get baremetalhost -A
@@ -303,7 +323,7 @@ watch kubectl get metal3cluster,kubeadmcontrolplane,metal3machine,baremetalhost 
 ## Extract child cluster kubeconfig
 
 ```bash
-kubectl -n baremetal-operator-system get secret capm3-demo-kubeconfig -o jsonpath='{.data.value}' | base64 -d > capm3-demo.kubeconfig
+kubectl -n metal3-system get secret capm3-demo-kubeconfig -o jsonpath='{.data.value}' | base64 -d > capm3-demo.kubeconfig
 ```
 
 ## Test connectivity
