@@ -262,6 +262,7 @@
                 <name>{{ provisioning_network.name }}</name>
                 <forward mode='{{ provisioning_network.forward_mode | default("nat") }}'/>
                 <bridge name='{{ provisioning_network.bridge }}' stp='on' delay='0'/>
+                <dns enable='no'/>
                 <ip address='{{ provisioning_network.address }}' netmask='{{ provisioning_network.netmask }}'>
                 </ip>
               </network>

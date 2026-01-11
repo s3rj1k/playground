@@ -38,7 +38,7 @@
     INSTALL_TRAEFIK: true
     HCP_MODE: false
     CILIUM_LB_ENABLED: true
-    CILIUM_DEVICES: "ens+ eth+ virbr+"
+    CILIUM_DEVICES: "ens+ enp+ eth+ virbr+"
     INSTALL_OPENEBS: true
     INSTALL_LOCAL_PATH_PROVISIONER: false
     KITE_HOSTNAMES:

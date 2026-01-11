@@ -1,0 +1,1006 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: metal3ironicha.v1alpha1.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Metal3IronicHA
+    spec:
+      # Credentials - reference to user-managed source secret
+      credentialsSourceSecretName: string | default=ironic-credentials-source
+      # High Availability settings
+      highAvailability:
+        insecureRPC: boolean | default=true
+      # Database (required for HA) - uses mariadb-operator
+      database:
+        storageSize: string | default=10Gi
+        storageClassName: string | default=""
+      # Networking (no ipAddress in HA mode - each node uses its own)
+      networking:
+        interface: string | default=eth0
+        externalIP: string | default=""
+        imageServerPort: integer | default=6180
+        imageServerTLSPort: integer | default=6183
+      # TLS
+      tls:
+        enabled: boolean | default=true
+        disableVirtualMediaTLS: boolean | default=false
+      # Deploy Ramdisk (stock downloader disabled)
+      deployRamdisk:
+        sshKey: string | default=""
+        extraKernelParams: string | default=""
+      # Custom file downloader (aria2c)
+      downloader:
+        image: string | default=snowdreamtech/aria2:latest
+        config: string | default=""
+      # Prometheus
+      prometheusExporter:
+        enabled: boolean | default=false
+      # BMO Settings
+      bmo:
+        concurrency: integer | default=4
+        provisioningLimit: integer | default=20
+      # CoreDNS for bare metal provisioning (runs in bootp pod with hostNetwork)
+      dns:
+        enabled: boolean | default=true
+        image: string | default=coredns/coredns:latest
+        ipAddress: string | default=""
+        upstreamDNS: string | default=8.8.8.8
+        clusterDNS: string | default=172.21.0.10
+        healthPort: integer | default=8180
+        readyPort: integer | default=8181
+      # TFTP server for PXE boot
+      tftp:
+        enabled: boolean | default=false
+        ipAddress: string | default=""
+        image: string | default=wastrachan/tftpd:latest
+        downloaderImage: string | default=snowdreamtech/aria2:latest
+        binaries: string | default=""
+      # DHCP server for provisioning network
+      dhcp:
+        image: string | default=ghcr.io/s3rj1k/metal3-dhcp:1768936377
+        bindAddr: string | default=""
+        bindInterface: string | default=""
+        httpAddr: string | default=:8080
+        serverIdentifier: string | default=""
+        tftpServer: string | default=""
+        labelSelector: string | default=metal3.io/provisioning=true
+        resyncPeriod: string | default=5m
+        logServer: string | default=""
+        domainName: string | default=""
+        nameServers: string | default=""
+        ntpServers: string | default=""
+        leaseTime: string | default=86400
+        domainSearch: string | default=""
+        bootFileOverrideAnnotation: string | default=dhcp.metal3.io/boot-file-name
+        bootFileLegacy: string | default=undionly.kpxe
+        bootFileUefi: string | default=snponly.efi
+        bootFileUefiArm64: string | default=snponly-arm64.efi
+        bootFileUefiSecureboot: string | default=snponly-signed.efi
+        bootFileUefiSecurebootArm64: string | default=snponly-arm64-signed.efi
+        ipclaimNameSuffix: string | default=""
+        mapPreallocSize: string | default=4094
+        pprofEnabled: boolean | default=false
+      # Parca continuous profiling (requires pprofEnabled=true)
+      parca:
+        image: string | default=ghcr.io/parca-dev/parca:v0.25.0
+        nodePort: integer | default=30070
+        scrapeInterval: string | default=30s
+        scrapeAddr: string | default=""
+      # Metal3 IPAM - Provisioning IP Pool
+      provisionPool:
+        enabled: boolean | default=false
+        namePrefix: string | default=provision
+        gateway: string | default=""
+        prefix: integer | default=24
+        start: string | default=""
+        end: string | default=""
+        dnsServers: string | default=""
+    status:
+      databaseReady: ${mariadb.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      ironicReady: ${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      bootpReady: ${bootpDeployment.status.readyReplicas == bootpDeployment.status.replicas}
+  resources:
+    # Ironic ConfigMap for BMO (endpoint configuration)
+    - id: ironicConfigMap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ironic
+          namespace: ${schema.metadata.namespace}
+        data:
+          IRONIC_ENDPOINT: https://ironic.${schema.metadata.namespace}.svc:443/v1
+          BMO_CONCURRENCY: ${string(schema.spec.bmo.concurrency)}
+          PROVISIONING_LIMIT: ${string(schema.spec.bmo.provisioningLimit)}
+
+    # External reference to user-managed credentials source secret
+    - id: credentialsSource
+      externalRef:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${schema.spec.credentialsSourceSecretName}
+          namespace: ${schema.metadata.namespace}
+
+    # KRO-managed credentials secret (copy from source)
+    - id: ironicCredentials
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ironic-credentials
+          namespace: ${schema.metadata.namespace}
+        type: Opaque
+        data:
+          username: "${credentialsSource.data.username}"
+          password: "${credentialsSource.data.password}"
+
+    # MariaDB root password secret (for mariadb-operator)
+    - id: mariadbRootPassword
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: mariadb-root-password
+          namespace: ${schema.metadata.namespace}
+        type: Opaque
+        data:
+          password: "${credentialsSource.data.password}"
+
+    # MariaDB instance (managed by mariadb-operator)
+    - id: mariadb
+      readyWhen:
+        - ${mariadb.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: k8s.mariadb.com/v1alpha1
+        kind: MariaDB
+        metadata:
+          name: mariadb
+          namespace: ${schema.metadata.namespace}
+        spec:
+          rootPasswordSecretKeyRef:
+            name: ${mariadbRootPassword.metadata.name}
+            key: password
+          storage:
+            size: ${schema.spec.database.storageSize}
+            storageClassName: ${schema.spec.database.storageClassName}
+          service:
+            type: ClusterIP
+
+    # Ironic database (managed by mariadb-operator)
+    - id: ironicDatabase
+      template:
+        apiVersion: k8s.mariadb.com/v1alpha1
+        kind: Database
+        metadata:
+          name: ironic
+          namespace: ${schema.metadata.namespace}
+        spec:
+          mariaDbRef:
+            name: ${mariadb.metadata.name}
+          characterSet: utf8mb4
+          collate: utf8mb4_unicode_ci
+
+    # Ironic user password secret
+    - id: ironicUserPassword
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ironic-user-password
+          namespace: ${schema.metadata.namespace}
+        type: Opaque
+        data:
+          password: "${credentialsSource.data.password}"
+
+    # Ironic database user (managed by mariadb-operator)
+    - id: ironicUser
+      template:
+        apiVersion: k8s.mariadb.com/v1alpha1
+        kind: User
+        metadata:
+          name: ironic
+          namespace: ${schema.metadata.namespace}
+        spec:
+          mariaDbRef:
+            name: ${mariadb.metadata.name}
+          passwordSecretKeyRef:
+            name: ${ironicUserPassword.metadata.name}
+            key: password
+          maxUserConnections: 0
+
+    # Grant all privileges on ironic database to ironic user
+    - id: ironicGrant
+      template:
+        apiVersion: k8s.mariadb.com/v1alpha1
+        kind: Grant
+        metadata:
+          name: ironic-grant
+          namespace: ${schema.metadata.namespace}
+        spec:
+          mariaDbRef:
+            name: ${mariadb.metadata.name}
+          privileges:
+            - ALL PRIVILEGES
+          database: ${ironicDatabase.metadata.name}
+          table: "*"
+          username: ${ironicUser.metadata.name}
+          grantOption: false
+
+    # Ironic database credentials secret (for Ironic to connect)
+    # Username "ironic" must match the User CR name (base64: aXJvbmlj)
+    - id: ironicDbCredentials
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ironic-db-credentials
+          namespace: ${schema.metadata.namespace}
+        type: Opaque
+        data:
+          username: aXJvbmlj
+          password: "${credentialsSource.data.password}"
+
+    # Self-signed issuer for CA certificate
+    - id: selfSignedIssuer
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Issuer
+        metadata:
+          name: ironic-selfsigned
+          namespace: ${schema.metadata.namespace}
+        spec:
+          selfSigned: {}
+
+    # CA Certificate (creates ironic-cacert secret for BMO)
+    - id: caCertificate
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: ironic-ca
+          namespace: ${schema.metadata.namespace}
+        spec:
+          secretName: ironic-cacert
+          duration: 87600h
+          renewBefore: 720h
+          commonName: ironic-ca
+          isCA: true
+          issuerRef:
+            name: ${selfSignedIssuer.metadata.name}
+            kind: Issuer
+
+    # CA Issuer for signing Ironic TLS cert
+    - id: caIssuer
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Issuer
+        metadata:
+          name: ironic-ca-issuer
+          namespace: ${schema.metadata.namespace}
+        spec:
+          ca:
+            secretName: ${caCertificate.spec.secretName}
+
+    # Ironic TLS certificate (signed by CA)
+    - id: ironicCertificate
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: ironic-tls
+          namespace: ${schema.metadata.namespace}
+        spec:
+          secretName: ironic-tls
+          duration: 87600h
+          renewBefore: 720h
+          commonName: ironic
+          dnsNames:
+            - ironic
+            - ironic.${schema.metadata.namespace}
+            - ironic.${schema.metadata.namespace}.svc
+            - ironic.${schema.metadata.namespace}.svc.cluster.local
+          issuerRef:
+            name: ${caIssuer.metadata.name}
+            kind: Issuer
+
+    # Ironic instance - HA mode with database, custom downloader, no DHCP
+    - id: ironic
+      readyWhen:
+        - ${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: ironic.metal3.io/v1alpha1
+        kind: Ironic
+        metadata:
+          name: ironic
+          namespace: ${schema.metadata.namespace}
+        spec:
+          highAvailability: true
+          database:
+            host: ${mariadb.metadata.name}.${schema.metadata.namespace}.svc
+            name: ${ironicDatabase.metadata.name}
+            credentialsName: ${ironicDbCredentials.metadata.name}
+          apiCredentialsName: ${ironicCredentials.metadata.name}
+          tls:
+            certificateName: ironic-tls
+            disableVirtualMediaTLS: ${schema.spec.tls.disableVirtualMediaTLS}
+            insecureRPC: ${schema.spec.highAvailability.insecureRPC}
+          deployRamdisk:
+            sshKey: ${schema.spec.deployRamdisk.sshKey}
+            extraKernelParams: ${schema.spec.deployRamdisk.extraKernelParams}
+            disableDownloader: true
+          prometheusExporter:
+            enabled: ${schema.spec.prometheusExporter.enabled}
+            disableServiceMonitor: true
+          networking:
+            interface: ${schema.spec.networking.interface}
+            externalIP: ${schema.spec.networking.externalIP}
+            imageServerPort: ${schema.spec.networking.imageServerPort}
+            imageServerTLSPort: ${schema.spec.networking.imageServerTLSPort}
+          overrides:
+            initContainers:
+              # Custom file downloader using aria2c
+              - name: file-downloader
+                image: ${schema.spec.downloader.image}
+                securityContext:
+                  runAsUser: 997
+                  runAsGroup: 994
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    mkdir -p /shared/html/images
+                    cat > /tmp/input.txt << 'ARIA2EOF'
+                    ${schema.spec.downloader.config}
+                    ARIA2EOF
+                    aria2c \
+                      --input-file=/tmp/input.txt \
+                      --dir=/shared/html/images \
+                      --check-integrity=true \
+                      --continue=true \
+                      --max-connection-per-server=4 \
+                      --min-split-size=5M \
+                      --console-log-level=notice
+                volumeMounts:
+                  - name: ironic-shared
+                    mountPath: /shared
+
+    # CoreDNS ConfigMap (used by bootp pod)
+    - id: corednsConfigMap
+      includeWhen:
+        - ${schema.spec.tftp.enabled && schema.spec.dns.enabled}
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: coredns
+          namespace: ${schema.metadata.namespace}
+        data:
+          Corefile: |
+            .:53 {
+                bind ${schema.spec.dns.ipAddress}
+                errors
+                health ${schema.spec.dns.ipAddress}:${string(schema.spec.dns.healthPort)} {
+                    lameduck 5s
+                }
+                ready ${schema.spec.dns.ipAddress}:${string(schema.spec.dns.readyPort)}
+                log
+                cache 30
+                loop
+                reload
+                loadbalance
+                forward . ${schema.spec.dns.upstreamDNS}
+            }
+            cluster.local:53 {
+                bind ${schema.spec.dns.ipAddress}
+                errors
+                cache 30
+                forward . ${schema.spec.dns.clusterDNS}
+            }
+            ${schema.metadata.namespace}.svc.cluster.local:53 {
+                bind ${schema.spec.dns.ipAddress}
+                errors
+                cache 30
+                forward . ${schema.spec.dns.clusterDNS}
+            }
+
+    # ServiceAccount for BOOTP/DHCP server
+    - id: bootpServiceAccount
+      includeWhen:
+        - ${schema.spec.tftp.enabled}
+      template:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: bootp
+          namespace: ${schema.metadata.namespace}
+
+    # Role for BOOTP/DHCP server to read IPAddresses
+    - id: bootpRole
+      includeWhen:
+        - ${schema.spec.tftp.enabled}
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata:
+          name: bootp
+          namespace: ${schema.metadata.namespace}
+        rules:
+          - apiGroups:
+              - ipam.metal3.io
+            resources:
+              - ipaddresses
+            verbs:
+              - get
+              - list
+              - watch
+          - apiGroups:
+              - metal3.io
+            resources:
+              - baremetalhosts
+            verbs:
+              - get
+              - list
+              - watch
+
+    # RoleBinding for BOOTP/DHCP server
+    - id: bootpRoleBinding
+      includeWhen:
+        - ${schema.spec.tftp.enabled}
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: bootp
+          namespace: ${schema.metadata.namespace}
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: Role
+          name: ${bootpRole.metadata.name}
+        subjects:
+          - kind: ServiceAccount
+            name: ${bootpServiceAccount.metadata.name}
+            namespace: ${schema.metadata.namespace}
+
+    # BOOTP Deployment for PXE boot (uses hostNetwork for direct L2 access)
+    - id: bootpDeployment
+      includeWhen:
+        - ${schema.spec.tftp.enabled}
+      readyWhen:
+        - ${bootpDeployment.status.readyReplicas == bootpDeployment.status.replicas}
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: bootp
+          namespace: ${schema.metadata.namespace}
+          labels:
+            app: bootp
+        spec:
+          replicas: 1
+          strategy:
+            type: Recreate
+          selector:
+            matchLabels:
+              app: bootp
+          template:
+            metadata:
+              labels:
+                app: bootp
+            spec:
+              serviceAccountName: ${bootpServiceAccount.metadata.name}
+              hostNetwork: true
+              initContainers:
+                - name: download-binaries
+                  image: ${schema.spec.tftp.downloaderImage}
+                  command:
+                    - /bin/sh
+                    - -c
+                    - |
+                      mkdir -p /data
+                      cat > /tmp/input.txt << 'ARIA2EOF'
+                      ${schema.spec.tftp.binaries}
+                      ARIA2EOF
+                      aria2c \
+                        --input-file=/tmp/input.txt \
+                        --dir=/data \
+                        --check-integrity=true \
+                        --continue=true \
+                        --max-connection-per-server=4 \
+                        --min-split-size=5M \
+                        --console-log-level=notice
+                      cat > /data/autoexec.ipxe << 'IPXEEOF'
+                      #!ipxe
+                      dhcp
+                      chain http://${schema.spec.tftp.ipAddress}:${string(schema.spec.networking.imageServerPort)}/boot.ipxe
+                      IPXEEOF
+                  volumeMounts:
+                    - name: tftp-data
+                      mountPath: /data
+              containers:
+                - name: tftp
+                  image: ${schema.spec.tftp.image}
+                  command:
+                    - /usr/sbin/in.tftpd
+                  args:
+                    - -L
+                    - -v
+                    - -s
+                    - -a
+                    - ${schema.spec.tftp.ipAddress}:69
+                    - /data
+                  volumeMounts:
+                    - name: tftp-data
+                      mountPath: /data
+                  securityContext:
+                    capabilities:
+                      add:
+                        - NET_BIND_SERVICE
+                        - SYS_CHROOT
+                - name: dhcp
+                  image: ${schema.spec.dhcp.image}
+                  env:
+                    - name: DHCP_BIND_ADDR
+                      value: ${schema.spec.dhcp.bindAddr}
+                    - name: DHCP_BIND_PORT
+                      value: "67"
+                    - name: DHCP_BIND_INTERFACE
+                      value: ${schema.spec.dhcp.bindInterface}
+                    - name: DHCP_HTTP_ADDR
+                      value: ${schema.spec.dhcp.httpAddr}
+                    - name: DHCP_NAMESPACE
+                      value: ${schema.metadata.namespace}
+                    - name: DHCP_LABEL_SELECTOR
+                      value: ${schema.spec.dhcp.labelSelector}
+                    - name: DHCP_RESYNC_PERIOD
+                      value: ${schema.spec.dhcp.resyncPeriod}
+                    - name: DHCP_SERVER_IDENTIFIER
+                      value: ${schema.spec.dhcp.serverIdentifier}
+                    - name: DHCP_LOG_SERVER
+                      value: ${schema.spec.dhcp.logServer}
+                    - name: DHCP_DOMAIN_NAME
+                      value: ${schema.spec.dhcp.domainName}
+                    - name: DHCP_NAME_SERVERS
+                      value: '${schema.spec.dhcp.nameServers != "" ? schema.spec.dhcp.nameServers : (schema.spec.dns.enabled ? schema.spec.dns.ipAddress : "")}'
+                    - name: DHCP_NTP_SERVERS
+                      value: ${schema.spec.dhcp.ntpServers}
+                    - name: DHCP_LEASE_TIME
+                      value: ${schema.spec.dhcp.leaseTime}
+                    - name: DHCP_TFTP_SERVER
+                      value: ${schema.spec.dhcp.tftpServer}
+                    - name: DHCP_DOMAIN_SEARCH
+                      value: ${schema.spec.dhcp.domainSearch}
+                    - name: DHCP_BOOT_FILE_OVERRIDE_ANNOTATION
+                      value: ${schema.spec.dhcp.bootFileOverrideAnnotation}
+                    - name: DHCP_BOOT_FILE_LEGACY
+                      value: ${schema.spec.dhcp.bootFileLegacy}
+                    - name: DHCP_BOOT_FILE_UEFI
+                      value: ${schema.spec.dhcp.bootFileUefi}
+                    - name: DHCP_BOOT_FILE_UEFI_ARM64
+                      value: ${schema.spec.dhcp.bootFileUefiArm64}
+                    - name: DHCP_BOOT_FILE_UEFI_SECUREBOOT
+                      value: ${schema.spec.dhcp.bootFileUefiSecureboot}
+                    - name: DHCP_BOOT_FILE_UEFI_SECUREBOOT_ARM64
+                      value: ${schema.spec.dhcp.bootFileUefiSecurebootArm64}
+                    - name: DHCP_IPCLAIM_NAME_SUFFIX
+                      value: ${schema.spec.dhcp.ipclaimNameSuffix}
+                    - name: DHCP_MAP_PREALLOC_SIZE
+                      value: ${schema.spec.dhcp.mapPreallocSize}
+                    - name: DHCP_PPROF_ENABLED
+                      value: ${string(schema.spec.dhcp.pprofEnabled)}
+                  securityContext:
+                    capabilities:
+                      add:
+                        - NET_BIND_SERVICE
+                - name: coredns
+                  image: ${schema.spec.dns.image}
+                  args:
+                    - -conf
+                    - /etc/coredns/Corefile
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      add:
+                        - NET_BIND_SERVICE
+                      drop:
+                        - ALL
+                  volumeMounts:
+                    - name: coredns-config
+                      mountPath: /etc/coredns
+                      readOnly: true
+              terminationGracePeriodSeconds: 5
+              volumes:
+                - name: tftp-data
+                  emptyDir: {}
+                - name: coredns-config
+                  configMap:
+                    name: coredns
+
+    # Metal3 IPAM - Provisioning IP Pool
+    - id: provisionIPPool
+      includeWhen:
+        - ${schema.spec.provisionPool.enabled}
+      template:
+        apiVersion: ipam.metal3.io/v1alpha1
+        kind: IPPool
+        metadata:
+          name: provision
+          namespace: ${schema.metadata.namespace}
+        spec:
+          namePrefix: ${schema.spec.provisionPool.namePrefix}
+          prefix: ${schema.spec.provisionPool.prefix}
+          gateway: ${schema.spec.provisionPool.gateway}
+          dnsServers:
+            - ${schema.spec.provisionPool.dnsServers}
+          pools:
+            - start: ${schema.spec.provisionPool.start}
+              end: ${schema.spec.provisionPool.end}
+              prefix: ${schema.spec.provisionPool.prefix}
+              gateway: ${schema.spec.provisionPool.gateway}
+
+    # Kyverno RBAC - Allow generating IPClaim resources and watching BareMetalHosts
+    - id: kyvernoIPClaimClusterRole
+      includeWhen:
+        - ${schema.spec.provisionPool.enabled}
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: kyverno-ipclaim-generator
+        rules:
+          - apiGroups:
+              - ipam.metal3.io
+            resources:
+              - ipclaims
+              - ipaddresses
+            verbs:
+              - create
+              - update
+              - patch
+              - delete
+              - get
+              - list
+              - watch
+          - apiGroups:
+              - metal3.io
+            resources:
+              - baremetalhosts
+            verbs:
+              - get
+              - list
+              - watch
+
+    - id: kyvernoIPClaimClusterRoleBinding
+      includeWhen:
+        - ${schema.spec.provisionPool.enabled}
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: kyverno-ipclaim-generator
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: ${kyvernoIPClaimClusterRole.metadata.name}
+        subjects:
+          - kind: ServiceAccount
+            name: kyverno-admission-controller
+            namespace: kyverno-system
+          - kind: ServiceAccount
+            name: kyverno-background-controller
+            namespace: kyverno-system
+
+    # Kyverno ClusterPolicy - Generate IPClaim for BareMetalHost
+    - id: bmhGenerateIPClaimPolicy
+      includeWhen:
+        - ${schema.spec.provisionPool.enabled}
+      template:
+        apiVersion: kyverno.io/v1
+        kind: ClusterPolicy
+        metadata:
+          name: bmh-generate-ipclaim
+          annotations:
+            policies.kyverno.io/title: Generate IPClaim for BareMetalHost
+            policies.kyverno.io/description: >-
+              When a BareMetalHost is created or updated with the annotation
+              'ipam.metal3.io/ip-pool', automatically create an IPClaim resource
+              with the BMH as owner reference.
+        spec:
+          generateExisting: true
+          rules:
+            - name: generate-ipclaim
+              match:
+                any:
+                  - resources:
+                      kinds:
+                        - metal3.io/v1alpha1/BareMetalHost
+                      operations:
+                        - CREATE
+                        - UPDATE
+              preconditions:
+                all:
+                  - key: "{{ request.object.metadata.annotations.\"ipam.metal3.io/ip-pool\" || '' }}"
+                    operator: NotEquals
+                    value: ""
+              generate:
+                apiVersion: ipam.metal3.io/v1alpha1
+                kind: IPClaim
+                name: "{{ request.object.metadata.name }}"
+                namespace: "{{ request.object.metadata.namespace }}"
+                synchronize: true
+                data:
+                  metadata:
+                    labels:
+                      metal3.io/provisioning: "true"
+                      metal3.io/bmh: "{{ request.object.metadata.name }}"
+                    ownerReferences:
+                      - apiVersion: metal3.io/v1alpha1
+                        kind: BareMetalHost
+                        name: "{{ request.object.metadata.name }}"
+                        uid: "{{ request.object.metadata.uid }}"
+                        controller: false
+                        blockOwnerDeletion: true
+                  spec:
+                    pool:
+                      name: "{{ request.object.metadata.annotations.\"ipam.metal3.io/ip-pool\" }}"
+                      namespace: "{{ request.object.metadata.namespace }}"
+
+    # Kyverno ClusterPolicy - Deny IPClaim annotation change on BareMetalHost
+    - id: bmhDenyIPClaimAnnotationChangePolicy
+      includeWhen:
+        - ${schema.spec.provisionPool.enabled}
+      template:
+        apiVersion: kyverno.io/v1
+        kind: ClusterPolicy
+        metadata:
+          name: bmh-deny-ipclaim-annotation-change
+          annotations:
+            policies.kyverno.io/title: Deny IPClaim Annotation Change on BareMetalHost
+            policies.kyverno.io/description: >-
+              Denies changing the value of 'ipam.metal3.io/ip-pool' annotation
+              on BareMetalHost after it was set to a non-empty value.
+              Setting the initial value and removing the annotation are allowed.
+        spec:
+          validationFailureAction: Enforce
+          rules:
+            - name: deny-ipclaim-annotation-change
+              match:
+                any:
+                  - resources:
+                      kinds:
+                        - metal3.io/v1alpha1/BareMetalHost
+                      operations:
+                        - UPDATE
+              preconditions:
+                all:
+                  # Old annotation must have a non-empty value
+                  - key: "{{ request.oldObject.metadata.annotations.\"ipam.metal3.io/ip-pool\" || '' }}"
+                    operator: NotEquals
+                    value: ""
+              validate:
+                message: >-
+                  The 'ipam.metal3.io/ip-pool' annotation is immutable once set.
+                  You cannot change or remove it. Delete the BareMetalHost to release the IP.
+                deny:
+                  conditions:
+                    any:
+                      - key: "{{ request.object.metadata.annotations.\"ipam.metal3.io/ip-pool\" || '' }}"
+                        operator: NotEquals
+                        value: "{{ request.oldObject.metadata.annotations.\"ipam.metal3.io/ip-pool\" }}"
+
+    # Kyverno ClusterPolicy - Sync boot-file-name annotation from BMH to IPClaim and IPAddress
+    - id: bmhSyncBootFileNamePolicy
+      includeWhen:
+        - ${schema.spec.provisionPool.enabled}
+      template:
+        apiVersion: kyverno.io/v1
+        kind: ClusterPolicy
+        metadata:
+          name: bmh-sync-boot-file-name
+          annotations:
+            policies.kyverno.io/title: Sync Boot File Name to IPClaim and IPAddress
+            policies.kyverno.io/description: >-
+              When a BareMetalHost has the 'dhcp.metal3.io/boot-file-name' annotation
+              set or updated, this policy copies the annotation to the corresponding
+              IPClaim (matched by name) and IPAddress (matched by spec.claim.name).
+        spec:
+          mutateExistingOnPolicyUpdate: true
+          rules:
+            - name: sync-boot-file-name-to-ipclaim
+              match:
+                any:
+                  - resources:
+                      kinds:
+                        - metal3.io/v1alpha1/BareMetalHost
+                      operations:
+                        - CREATE
+                        - UPDATE
+              preconditions:
+                all:
+                  - key: "{{ request.object.metadata.annotations.\"dhcp.metal3.io/boot-file-name\" || '' }}"
+                    operator: NotEquals
+                    value: ""
+              mutate:
+                targets:
+                  - apiVersion: ipam.metal3.io/v1alpha1
+                    kind: IPClaim
+                    namespace: "{{ request.object.metadata.namespace }}"
+                    name: "{{ request.object.metadata.name }}"
+                patchStrategicMerge:
+                  metadata:
+                    annotations:
+                      dhcp.metal3.io/boot-file-name: "{{ request.object.metadata.annotations.\"dhcp.metal3.io/boot-file-name\" }}"
+            - name: sync-boot-file-name-to-ipaddress
+              match:
+                any:
+                  - resources:
+                      kinds:
+                        - metal3.io/v1alpha1/BareMetalHost
+                      operations:
+                        - CREATE
+                        - UPDATE
+              preconditions:
+                all:
+                  - key: "{{ request.object.metadata.annotations.\"dhcp.metal3.io/boot-file-name\" || '' }}"
+                    operator: NotEquals
+                    value: ""
+              mutate:
+                targets:
+                  - apiVersion: ipam.metal3.io/v1alpha1
+                    kind: IPAddress
+                    namespace: "{{ request.object.metadata.namespace }}"
+                    preconditions:
+                      all:
+                        - key: "{{ target.spec.claim.name }}"
+                          operator: Equals
+                          value: "{{ request.object.metadata.name }}"
+                patchStrategicMerge:
+                  metadata:
+                    annotations:
+                      dhcp.metal3.io/boot-file-name: "{{ request.object.metadata.annotations.\"dhcp.metal3.io/boot-file-name\" }}"
+
+    # Parca ConfigMap - scrape configuration for DHCP pprof endpoints
+    - id: parcaConfigMap
+      includeWhen:
+        - ${schema.spec.dhcp.pprofEnabled}
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: parca
+          namespace: ${schema.metadata.namespace}
+        data:
+          parca.yaml: |
+            object_storage:
+              bucket:
+                type: FILESYSTEM
+                config:
+                  directory: /var/lib/parca
+            scrape_configs:
+              - job_name: dhcp
+                scrape_interval: ${schema.spec.parca.scrapeInterval}
+                scrape_timeout: 60s
+                static_configs:
+                  - targets:
+                      - "${schema.spec.parca.scrapeAddr != "" ? schema.spec.parca.scrapeAddr : schema.spec.dhcp.serverIdentifier}${schema.spec.dhcp.httpAddr}"
+                profiling_config:
+                  pprof_config:
+                    process_cpu:
+                      enabled: true
+                      path: /debug/pprof/profile
+                      delta: true
+                    heap:
+                      enabled: true
+                      path: /debug/pprof/heap
+                    allocs:
+                      enabled: true
+                      path: /debug/pprof/allocs
+                    goroutine:
+                      enabled: true
+                      path: /debug/pprof/goroutine
+                    block:
+                      enabled: true
+                      path: /debug/pprof/block
+                    mutex:
+                      enabled: true
+                      path: /debug/pprof/mutex
+
+    # Parca Deployment
+    - id: parcaDeployment
+      includeWhen:
+        - ${schema.spec.dhcp.pprofEnabled}
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: parca
+          namespace: ${schema.metadata.namespace}
+          labels:
+            app: parca
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: parca
+          template:
+            metadata:
+              labels:
+                app: parca
+            spec:
+              hostNetwork: true
+              dnsPolicy: ClusterFirstWithHostNet
+              serviceAccountName: default
+              containers:
+                - name: parca
+                  image: ${schema.spec.parca.image}
+                  args:
+                    - /parca
+                    - --config-path=/etc/parca/parca.yaml
+                    - --log-level=info
+                  ports:
+                    - containerPort: 7070
+                      name: http
+                  readinessProbe:
+                    httpGet:
+                      path: /ready
+                      port: http
+                    initialDelaySeconds: 5
+                    periodSeconds: 10
+                  livenessProbe:
+                    httpGet:
+                      path: /ready
+                      port: http
+                    initialDelaySeconds: 15
+                    periodSeconds: 20
+                  volumeMounts:
+                    - name: config
+                      mountPath: /etc/parca
+                      readOnly: true
+                    - name: data
+                      mountPath: /var/lib/parca
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop:
+                        - ALL
+              terminationGracePeriodSeconds: 30
+              volumes:
+                - name: config
+                  configMap:
+                    name: ${parcaConfigMap.metadata.name}
+                - name: data
+                  emptyDir: {}
+
+    # Parca NodePort Service
+    - id: parcaService
+      includeWhen:
+        - ${schema.spec.dhcp.pprofEnabled}
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: parca
+          namespace: ${schema.metadata.namespace}
+          labels:
+            app: parca
+        spec:
+          type: NodePort
+          selector:
+            app: parca
+          ports:
+            - port: 7070
+              targetPort: http
+              nodePort: ${schema.spec.parca.nodePort}
+              name: http
