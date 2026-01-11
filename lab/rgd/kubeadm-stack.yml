@@ -11,11 +11,18 @@ spec:
       versions:
         clusterAPI: string | default=v1.12.1
         addonHelm: string | default=v0.5.3
+        hostedControlPlane: string | default=v1.5.0
+      # Feature Gates
+      enableIgnition: boolean | default=false
+      # Hosted Control Plane
+      hostedControlPlane:
+        enabled: boolean | default=false
     status:
       coreProviderReady: ${coreProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       addonProviderReady: ${addonProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      bootstrapProviderReady: ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      bootstrapProviderReady: '${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True") || bootstrapProviderIgnition.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}'
       controlPlaneProviderReady: ${controlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      hostedControlPlaneProviderReady: '${hostedControlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}'
   resources:
     # Cluster API Core Provider
     - id: coreProvider
@@ -43,8 +50,10 @@ spec:
         spec:
           version: ${schema.spec.versions.addonHelm}
 
-    # Bootstrap Provider (Kubeadm)
+    # Bootstrap Provider (Kubeadm) - without Ignition
     - id: bootstrapProvider
+      includeWhen:
+        - ${!schema.spec.enableIgnition}
       readyWhen:
         - ${bootstrapProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       template:
@@ -54,6 +63,24 @@ spec:
           name: kubeadm
           namespace: ${schema.metadata.namespace}
         spec:
+          version: ${schema.spec.versions.clusterAPI}
+
+    # Bootstrap Provider (Kubeadm) - with Ignition feature gate
+    - id: bootstrapProviderIgnition
+      includeWhen:
+        - ${schema.spec.enableIgnition}
+      readyWhen:
+        - ${bootstrapProviderIgnition.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: BootstrapProvider
+        metadata:
+          name: kubeadm
+          namespace: ${schema.metadata.namespace}
+        spec:
+          manager:
+            featureGates:
+              KubeadmBootstrapFormatIgnition: true
           version: ${schema.spec.versions.clusterAPI}
 
     # Control Plane Provider (Kubeadm)
@@ -68,3 +95,20 @@ spec:
           namespace: ${schema.metadata.namespace}
         spec:
           version: ${schema.spec.versions.clusterAPI}
+
+    # Control Plane Provider (Hosted Control Plane)
+    - id: hostedControlPlaneProvider
+      includeWhen:
+        - ${schema.spec.hostedControlPlane.enabled}
+      readyWhen:
+        - ${hostedControlPlaneProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: operator.cluster.x-k8s.io/v1alpha2
+        kind: ControlPlaneProvider
+        metadata:
+          name: hosted-control-plane
+          namespace: ${schema.metadata.namespace}
+        spec:
+          fetchConfig:
+            url: https://github.com/teutonet/cluster-api-provider-hosted-control-plane/releases/${schema.spec.versions.hostedControlPlane}/control-plane-components.yaml
+          version: ${schema.spec.versions.hostedControlPlane}

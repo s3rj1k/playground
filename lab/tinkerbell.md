@@ -33,6 +33,7 @@ create-vm 5 virbr0
 ## Install ResourceGraphDefinitions
 
 ```bash
+kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/kubeadm-stack.yml
 kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/tinkerbell-kubeadm-stack.yml
 kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/tinkerbell-node.yml
 kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/tinkerbell-kubeadm-cluster.yml
@@ -46,26 +47,29 @@ kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/
 ```bash
 kubectl apply -f - <<EOF
 apiVersion: kro.run/v1alpha1
+kind: KubeadmStack
+metadata:
+  name: capi
+  namespace: capi-system
+spec:
+  enableIgnition: true
+  hostedControlPlane:
+    enabled: true
+---
+apiVersion: kro.run/v1alpha1
 kind: TinkerbellKubeadmStack
 metadata:
-  name: tinkerbell-capi
-  namespace: kro-system
+  name: tinkerbell
+  namespace: capi-system
 spec:
   tinkerbellIP: "172.17.1.1"
   sourceInterface: virbr0
   trustedProxies: "10.244.0.0/16"
-  versions:
-    clusterAPI: v1.11.3
-    addonHelm: v0.5.3
-    tinkerbellProvider: v0.6.8
-    tinkerbellChart: v0.22.0
-    hostedControlPlane: v1.5.0
-  hostedControlPlane:
-    enabled: true
   # isoURL: https://github.com/tinkerbell/hook/releases/download/latest/hook-x86_64-efi-initrd.iso
 EOF
 
-kubectl wait tinkerbellkubeadmstack/tinkerbell-capi -n kro-system --for=condition=Ready --timeout=10m
+kubectl wait kubeadmstack/capi -n capi-system --for=condition=Ready --timeout=10m
+kubectl wait tinkerbellkubeadmstack/tinkerbell -n capi-system --for=condition=Ready --timeout=10m
 ```
 
 ---
