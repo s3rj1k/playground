@@ -54,8 +54,7 @@ spec:
         lockPassword: boolean | default=false
         sshAuthorizedKeys: "[]string | default=[]"
     status:
-      clusterReady: ${cluster.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      controlPlaneReady: ${hostedControlPlane.status.ready}
+      clusterReady: ${tinkerbellCluster.status.ready}
   resources:
     # Gateway for HCP traffic
     - id: gateway
@@ -184,48 +183,6 @@ spec:
           blocks:
             - start: ${schema.spec.ciliumLB.ipRangeStart}
               stop: ${schema.spec.ciliumLB.ipRangeStop}
-
-    # Cluster
-    - id: cluster
-      template:
-        apiVersion: cluster.x-k8s.io/v1beta2
-        kind: Cluster
-        metadata:
-          name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
-          labels:
-            cluster.x-k8s.io/cluster-name: ${schema.spec.name}
-            cni: cilium
-        spec:
-          clusterNetwork:
-            pods:
-              cidrBlocks:
-                - ${schema.spec.network.podCIDR}
-            services:
-              cidrBlocks:
-                - ${schema.spec.network.serviceCIDR}
-          controlPlaneRef:
-            apiGroup: controlplane.cluster.x-k8s.io
-            kind: HostedControlPlane
-            name: ${schema.spec.name}-control-plane
-          infrastructureRef:
-            apiGroup: infrastructure.cluster.x-k8s.io
-            kind: TinkerbellCluster
-            name: ${schema.spec.name}
-
-    # TinkerbellCluster Infrastructure
-    - id: tinkerbellCluster
-      template:
-        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-        kind: TinkerbellCluster
-        metadata:
-          name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
-        spec:
-          imageLookupBaseRegistry: ${schema.spec.image.registry}
-          imageLookupFormat: "{{.BaseRegistry}}/{{.OSDistro}}-{{.OSVersion}}:{{.KubernetesVersion}}.gz"
-          imageLookupOSDistro: ${schema.spec.image.osDistro}
-          imageLookupOSVersion: ${schema.spec.image.osVersion}
 
     # HostedControlPlane
     - id: hostedControlPlane
@@ -466,3 +423,45 @@ spec:
                 kind: TinkerbellMachineTemplate
                 name: ${workerMachineTemplate.metadata.name}
               version: ${schema.spec.kubernetesVersion}
+
+    # TinkerbellCluster Infrastructure
+    - id: tinkerbellCluster
+      template:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: TinkerbellCluster
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          imageLookupBaseRegistry: ${schema.spec.image.registry}
+          imageLookupFormat: "{{.BaseRegistry}}/{{.OSDistro}}-{{.OSVersion}}:{{.KubernetesVersion}}.gz"
+          imageLookupOSDistro: ${schema.spec.image.osDistro}
+          imageLookupOSVersion: ${schema.spec.image.osVersion}
+
+    # Cluster
+    - id: cluster
+      template:
+        apiVersion: cluster.x-k8s.io/v1beta2
+        kind: Cluster
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+          labels:
+            cluster.x-k8s.io/cluster-name: ${schema.spec.name}
+            cni: cilium
+        spec:
+          clusterNetwork:
+            pods:
+              cidrBlocks:
+                - ${schema.spec.network.podCIDR}
+            services:
+              cidrBlocks:
+                - ${schema.spec.network.serviceCIDR}
+          controlPlaneRef:
+            apiGroup: controlplane.cluster.x-k8s.io
+            kind: HostedControlPlane
+            name: ${schema.spec.name}-control-plane
+          infrastructureRef:
+            apiGroup: infrastructure.cluster.x-k8s.io
+            kind: TinkerbellCluster
+            name: ${schema.spec.name}

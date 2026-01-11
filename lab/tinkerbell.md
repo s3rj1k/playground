@@ -258,7 +258,7 @@ EOF
 ## Watch provisioning progress
 
 ```bash
-watch kubectl get tinkerbellcluster,kubeadmcontrolplane,hostedcontrolplane,tinkerbellmachine,workflow -A
+watch kubectl get tinkerbellkubeadmstack,cluster,tinkerbellcluster,kubeadmcontrolplane,hostedcontrolplane,tinkerbellmachine,workflow -A
 ```
 
 ## Extract child cluster kubeconfig

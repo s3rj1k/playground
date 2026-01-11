@@ -317,7 +317,7 @@ kubectl get baremetalhost -A
 ## Watch provisioning progress
 
 ```bash
-watch kubectl get metal3cluster,kubeadmcontrolplane,metal3machine,baremetalhost -A
+watch kubectl get cluster,metal3kubeadmcluster,metal3cluster,kubeadmcontrolplane,metal3machine,baremetalhost -A
 ```
 
 ## Extract child cluster kubeconfig

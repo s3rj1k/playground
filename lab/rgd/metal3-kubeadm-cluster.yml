@@ -36,54 +36,8 @@ spec:
         lockPassword: boolean | default=false
         sshAuthorizedKeys: "[]string | default=[]"
     status:
-      clusterReady: ${cluster.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      controlPlaneReady: ${controlPlane.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      clusterReady: ${metal3Cluster.status.ready}
   resources:
-    # Cluster
-    - id: cluster
-      template:
-        apiVersion: cluster.x-k8s.io/v1beta1
-        kind: Cluster
-        metadata:
-          name: ${schema.spec.name}
-          namespace: ${schema.metadata.namespace}
-          labels:
-            cluster.x-k8s.io/cluster-name: ${schema.spec.name}
-            cni: cilium
-        spec:
-          clusterNetwork:
-            pods:
-              cidrBlocks:
-                - ${schema.spec.network.podCIDR}
-            services:
-              cidrBlocks:
-                - ${schema.spec.network.serviceCIDR}
-          controlPlaneEndpoint:
-            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
-            port: ${schema.spec.controlPlaneEndpoint.port}
-          controlPlaneRef:
-            apiVersion: controlplane.cluster.x-k8s.io/v1beta1
-            kind: KubeadmControlPlane
-            name: ${schema.spec.name}-control-plane
-          infrastructureRef:
-            apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-            kind: Metal3Cluster
-            name: ${schema.spec.name}
-
-    # Metal3Cluster Infrastructure
-    - id: metal3Cluster
-      template:
-        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-        kind: Metal3Cluster
-        metadata:
-          name: ${schema.spec.name}
-          namespace: ${schema.metadata.namespace}
-        spec:
-          controlPlaneEndpoint:
-            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
-            port: ${schema.spec.controlPlaneEndpoint.port}
-          noCloudProvider: true
-
     # Cilium HelmChartProxy
     - id: ciliumAddon
       template:
@@ -141,7 +95,7 @@ spec:
     # KubeadmControlPlane
     - id: controlPlane
       template:
-        apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+        apiVersion: controlplane.cluster.x-k8s.io/v1beta2
         kind: KubeadmControlPlane
         metadata:
           name: ${schema.spec.name}-control-plane
@@ -159,13 +113,17 @@ spec:
             initConfiguration:
               nodeRegistration:
                 kubeletExtraArgs:
-                  provider-id: "metal3://{{ ds.meta_data.uuid }}"
-                  node-labels: "metal3.io/uuid={{ ds.meta_data.uuid }}"
+                  - name: provider-id
+                    value: "metal3://{{ ds.meta_data.uuid }}"
+                  - name: node-labels
+                    value: "metal3.io/uuid={{ ds.meta_data.uuid }}"
             joinConfiguration:
               nodeRegistration:
                 kubeletExtraArgs:
-                  provider-id: "metal3://{{ ds.meta_data.uuid }}"
-                  node-labels: "metal3.io/uuid={{ ds.meta_data.uuid }}"
+                  - name: provider-id
+                    value: "metal3://{{ ds.meta_data.uuid }}"
+                  - name: node-labels
+                    value: "metal3.io/uuid={{ ds.meta_data.uuid }}"
             files:
               - path: /usr/local/bin/kube-vip-setup.sh
                 permissions: "0755"
@@ -260,10 +218,11 @@ spec:
                 sshAuthorizedKeys: ${schema.spec.user.sshAuthorizedKeys}
                 sudo: ALL=(ALL) NOPASSWD:ALL
           machineTemplate:
-            infrastructureRef:
-              apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-              kind: Metal3MachineTemplate
-              name: ${schema.spec.name}-control-plane
+            spec:
+              infrastructureRef:
+                apiGroup: infrastructure.cluster.x-k8s.io
+                kind: Metal3MachineTemplate
+                name: ${schema.spec.name}-control-plane
           replicas: ${schema.spec.controlPlane.replicas}
           version: ${schema.spec.kubernetesVersion}
 
@@ -352,7 +311,7 @@ spec:
     # Worker KubeadmConfigTemplate
     - id: workerConfigTemplate
       template:
-        apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+        apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
         kind: KubeadmConfigTemplate
         metadata:
           name: ${schema.spec.name}-worker
@@ -363,8 +322,10 @@ spec:
               joinConfiguration:
                 nodeRegistration:
                   kubeletExtraArgs:
-                    provider-id: "metal3://{{ ds.meta_data.uuid }}"
-                    node-labels: "metal3.io/uuid={{ ds.meta_data.uuid }}"
+                    - name: provider-id
+                      value: "metal3://{{ ds.meta_data.uuid }}"
+                    - name: node-labels
+                      value: "metal3.io/uuid={{ ds.meta_data.uuid }}"
               users:
                 - name: ${schema.spec.user.name}
                   passwd: ${schema.spec.user.passwordHash}
@@ -375,7 +336,7 @@ spec:
     # Worker MachineDeployment
     - id: workerDeployment
       template:
-        apiVersion: cluster.x-k8s.io/v1beta1
+        apiVersion: cluster.x-k8s.io/v1beta2
         kind: MachineDeployment
         metadata:
           name: ${schema.spec.name}-worker
@@ -398,12 +359,57 @@ spec:
             spec:
               bootstrap:
                 configRef:
-                  apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+                  apiGroup: bootstrap.cluster.x-k8s.io
                   kind: KubeadmConfigTemplate
                   name: ${workerConfigTemplate.metadata.name}
               clusterName: ${cluster.metadata.name}
               infrastructureRef:
-                apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+                apiGroup: infrastructure.cluster.x-k8s.io
                 kind: Metal3MachineTemplate
                 name: ${workerMachineTemplate.metadata.name}
               version: ${schema.spec.kubernetesVersion}
+
+    # Metal3Cluster Infrastructure
+    - id: metal3Cluster
+      template:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: Metal3Cluster
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          controlPlaneEndpoint:
+            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
+            port: ${schema.spec.controlPlaneEndpoint.port}
+          noCloudProvider: true
+
+    # Cluster
+    - id: cluster
+      template:
+        apiVersion: cluster.x-k8s.io/v1beta2
+        kind: Cluster
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.metadata.namespace}
+          labels:
+            cluster.x-k8s.io/cluster-name: ${schema.spec.name}
+            cni: cilium
+        spec:
+          clusterNetwork:
+            pods:
+              cidrBlocks:
+                - ${schema.spec.network.podCIDR}
+            services:
+              cidrBlocks:
+                - ${schema.spec.network.serviceCIDR}
+          controlPlaneEndpoint:
+            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
+            port: ${schema.spec.controlPlaneEndpoint.port}
+          controlPlaneRef:
+            apiGroup: controlplane.cluster.x-k8s.io
+            kind: KubeadmControlPlane
+            name: ${schema.spec.name}-control-plane
+          infrastructureRef:
+            apiGroup: infrastructure.cluster.x-k8s.io
+            kind: Metal3Cluster
+            name: ${schema.spec.name}

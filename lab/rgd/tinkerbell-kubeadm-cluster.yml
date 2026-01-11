@@ -32,57 +32,8 @@ spec:
         lockPassword: boolean | default=false
         sshAuthorizedKeys: "[]string | default=[]"
     status:
-      clusterReady: ${cluster.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      controlPlaneReady: ${controlPlane.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      clusterReady: ${tinkerbellCluster.status.ready}
   resources:
-    # Cluster
-    - id: cluster
-      template:
-        apiVersion: cluster.x-k8s.io/v1beta2
-        kind: Cluster
-        metadata:
-          name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
-          labels:
-            cluster.x-k8s.io/cluster-name: ${schema.spec.name}
-            cni: cilium
-        spec:
-          clusterNetwork:
-            pods:
-              cidrBlocks:
-                - ${schema.spec.network.podCIDR}
-            services:
-              cidrBlocks:
-                - ${schema.spec.network.serviceCIDR}
-          controlPlaneEndpoint:
-            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
-            port: ${schema.spec.controlPlaneEndpoint.port}
-          controlPlaneRef:
-            apiGroup: controlplane.cluster.x-k8s.io
-            kind: KubeadmControlPlane
-            name: ${schema.spec.name}-control-plane
-          infrastructureRef:
-            apiGroup: infrastructure.cluster.x-k8s.io
-            kind: TinkerbellCluster
-            name: ${schema.spec.name}
-
-    # TinkerbellCluster Infrastructure
-    - id: tinkerbellCluster
-      template:
-        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-        kind: TinkerbellCluster
-        metadata:
-          name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
-        spec:
-          controlPlaneEndpoint:
-            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
-            port: ${schema.spec.controlPlaneEndpoint.port}
-          imageLookupBaseRegistry: ${schema.spec.image.registry}
-          imageLookupFormat: "{{.BaseRegistry}}/{{.OSDistro}}-{{.OSVersion}}:{{.KubernetesVersion}}.gz"
-          imageLookupOSDistro: ${schema.spec.image.osDistro}
-          imageLookupOSVersion: ${schema.spec.image.osVersion}
-
     # Cilium HelmChartProxy
     - id: ciliumAddon
       template:
@@ -533,3 +484,51 @@ spec:
                 kind: TinkerbellMachineTemplate
                 name: ${workerMachineTemplate.metadata.name}
               version: ${schema.spec.kubernetesVersion}
+
+    # TinkerbellCluster Infrastructure
+    - id: tinkerbellCluster
+      template:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: TinkerbellCluster
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          controlPlaneEndpoint:
+            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
+            port: ${schema.spec.controlPlaneEndpoint.port}
+          imageLookupBaseRegistry: ${schema.spec.image.registry}
+          imageLookupFormat: "{{.BaseRegistry}}/{{.OSDistro}}-{{.OSVersion}}:{{.KubernetesVersion}}.gz"
+          imageLookupOSDistro: ${schema.spec.image.osDistro}
+          imageLookupOSVersion: ${schema.spec.image.osVersion}
+
+    # Cluster
+    - id: cluster
+      template:
+        apiVersion: cluster.x-k8s.io/v1beta2
+        kind: Cluster
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+          labels:
+            cluster.x-k8s.io/cluster-name: ${schema.spec.name}
+            cni: cilium
+        spec:
+          clusterNetwork:
+            pods:
+              cidrBlocks:
+                - ${schema.spec.network.podCIDR}
+            services:
+              cidrBlocks:
+                - ${schema.spec.network.serviceCIDR}
+          controlPlaneEndpoint:
+            host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
+            port: ${schema.spec.controlPlaneEndpoint.port}
+          controlPlaneRef:
+            apiGroup: controlplane.cluster.x-k8s.io
+            kind: KubeadmControlPlane
+            name: ${schema.spec.name}-control-plane
+          infrastructureRef:
+            apiGroup: infrastructure.cluster.x-k8s.io
+            kind: TinkerbellCluster
+            name: ${schema.spec.name}
