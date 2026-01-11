@@ -1,0 +1,319 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: metal3ironicha.v1alpha1.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Metal3IronicHA
+    spec:
+      # Credentials - reference to user-managed source secret
+      credentialsSourceSecretName: string | default=ironic-credentials-source
+      # High Availability settings
+      highAvailability:
+        insecureRPC: boolean | default=true
+      # Database (required for HA) - uses mariadb-operator
+      database:
+        storageSize: string | default=10Gi
+        storageClassName: string | default=""
+      # Networking (no ipAddress in HA mode - each node uses its own)
+      networking:
+        interface: string | default=eth0
+        externalIP: string | default=""
+        imageServerPort: integer | default=6180
+        imageServerTLSPort: integer | default=6183
+      # TLS
+      tls:
+        enabled: boolean | default=true
+        disableVirtualMediaTLS: boolean | default=false
+      # Deploy Ramdisk (stock downloader disabled)
+      deployRamdisk:
+        sshKey: string | default=""
+        extraKernelParams: string | default=""
+      # Custom file downloader (aria2c)
+      downloader:
+        image: string | default=snowdreamtech/aria2:latest
+        config: string | default=""
+      # Prometheus
+      prometheusExporter:
+        enabled: boolean | default=false
+      # BMO Settings
+      bmo:
+        concurrency: integer | default=4
+        provisioningLimit: integer | default=20
+    status:
+      databaseReady: ${mariadb.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      ironicReady: ${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+  resources:
+    # Ironic ConfigMap for BMO (endpoint configuration)
+    - id: ironicConfigMap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ironic
+          namespace: ${schema.metadata.namespace}
+        data:
+          IRONIC_ENDPOINT: https://ironic.${schema.metadata.namespace}.svc:443/v1
+          BMO_CONCURRENCY: ${string(schema.spec.bmo.concurrency)}
+          PROVISIONING_LIMIT: ${string(schema.spec.bmo.provisioningLimit)}
+
+    # External reference to user-managed credentials source secret
+    - id: credentialsSource
+      externalRef:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${schema.spec.credentialsSourceSecretName}
+          namespace: ${schema.metadata.namespace}
+
+    # KRO-managed credentials secret (copy from source)
+    - id: ironicCredentials
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ironic-credentials
+          namespace: ${schema.metadata.namespace}
+        type: Opaque
+        data:
+          username: "${credentialsSource.data.username}"
+          password: "${credentialsSource.data.password}"
+
+    # MariaDB root password secret (for mariadb-operator)
+    - id: mariadbRootPassword
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: mariadb-root-password
+          namespace: ${schema.metadata.namespace}
+        type: Opaque
+        data:
+          password: "${credentialsSource.data.password}"
+
+    # MariaDB instance (managed by mariadb-operator)
+    - id: mariadb
+      readyWhen:
+        - ${mariadb.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: k8s.mariadb.com/v1alpha1
+        kind: MariaDB
+        metadata:
+          name: mariadb
+          namespace: ${schema.metadata.namespace}
+        spec:
+          rootPasswordSecretKeyRef:
+            name: ${mariadbRootPassword.metadata.name}
+            key: password
+          storage:
+            size: ${schema.spec.database.storageSize}
+            storageClassName: ${schema.spec.database.storageClassName}
+          service:
+            type: ClusterIP
+
+    # Ironic database (managed by mariadb-operator)
+    - id: ironicDatabase
+      template:
+        apiVersion: k8s.mariadb.com/v1alpha1
+        kind: Database
+        metadata:
+          name: ironic
+          namespace: ${schema.metadata.namespace}
+        spec:
+          mariaDbRef:
+            name: ${mariadb.metadata.name}
+          characterSet: utf8mb4
+          collate: utf8mb4_unicode_ci
+
+    # Ironic user password secret
+    - id: ironicUserPassword
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ironic-user-password
+          namespace: ${schema.metadata.namespace}
+        type: Opaque
+        data:
+          password: "${credentialsSource.data.password}"
+
+    # Ironic database user (managed by mariadb-operator)
+    - id: ironicUser
+      template:
+        apiVersion: k8s.mariadb.com/v1alpha1
+        kind: User
+        metadata:
+          name: ironic
+          namespace: ${schema.metadata.namespace}
+        spec:
+          mariaDbRef:
+            name: ${mariadb.metadata.name}
+          passwordSecretKeyRef:
+            name: ${ironicUserPassword.metadata.name}
+            key: password
+          maxUserConnections: 0
+
+    # Grant all privileges on ironic database to ironic user
+    - id: ironicGrant
+      template:
+        apiVersion: k8s.mariadb.com/v1alpha1
+        kind: Grant
+        metadata:
+          name: ironic-grant
+          namespace: ${schema.metadata.namespace}
+        spec:
+          mariaDbRef:
+            name: ${mariadb.metadata.name}
+          privileges:
+            - ALL PRIVILEGES
+          database: ${ironicDatabase.metadata.name}
+          table: "*"
+          username: ${ironicUser.metadata.name}
+          grantOption: false
+
+    # Ironic database credentials secret (for Ironic to connect)
+    # Username "ironic" must match the User CR name (base64: aXJvbmlj)
+    - id: ironicDbCredentials
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ironic-db-credentials
+          namespace: ${schema.metadata.namespace}
+        type: Opaque
+        data:
+          username: aXJvbmlj
+          password: "${credentialsSource.data.password}"
+
+    # Self-signed issuer for CA certificate
+    - id: selfSignedIssuer
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Issuer
+        metadata:
+          name: ironic-selfsigned
+          namespace: ${schema.metadata.namespace}
+        spec:
+          selfSigned: {}
+
+    # CA Certificate (creates ironic-cacert secret for BMO)
+    - id: caCertificate
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: ironic-ca
+          namespace: ${schema.metadata.namespace}
+        spec:
+          secretName: ironic-cacert
+          duration: 87600h
+          renewBefore: 720h
+          commonName: ironic-ca
+          isCA: true
+          issuerRef:
+            name: ${selfSignedIssuer.metadata.name}
+            kind: Issuer
+
+    # CA Issuer for signing Ironic TLS cert
+    - id: caIssuer
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Issuer
+        metadata:
+          name: ironic-ca-issuer
+          namespace: ${schema.metadata.namespace}
+        spec:
+          ca:
+            secretName: ${caCertificate.spec.secretName}
+
+    # Ironic TLS certificate (signed by CA)
+    - id: ironicCertificate
+      includeWhen:
+        - ${schema.spec.tls.enabled}
+      template:
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: ironic-tls
+          namespace: ${schema.metadata.namespace}
+        spec:
+          secretName: ironic-tls
+          duration: 87600h
+          renewBefore: 720h
+          commonName: ironic
+          dnsNames:
+            - ironic
+            - ironic.${schema.metadata.namespace}
+            - ironic.${schema.metadata.namespace}.svc
+            - ironic.${schema.metadata.namespace}.svc.cluster.local
+          issuerRef:
+            name: ${caIssuer.metadata.name}
+            kind: Issuer
+
+    # Ironic instance - HA mode with database, custom downloader, no DHCP
+    - id: ironic
+      readyWhen:
+        - ${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: ironic.metal3.io/v1alpha1
+        kind: Ironic
+        metadata:
+          name: ironic
+          namespace: ${schema.metadata.namespace}
+        spec:
+          highAvailability: true
+          database:
+            host: ${mariadb.metadata.name}.${schema.metadata.namespace}.svc
+            name: ${ironicDatabase.metadata.name}
+            credentialsName: ${ironicDbCredentials.metadata.name}
+          apiCredentialsName: ${ironicCredentials.metadata.name}
+          tls:
+            certificateName: ironic-tls
+            disableVirtualMediaTLS: ${schema.spec.tls.disableVirtualMediaTLS}
+            insecureRPC: ${schema.spec.highAvailability.insecureRPC}
+          deployRamdisk:
+            sshKey: ${schema.spec.deployRamdisk.sshKey}
+            extraKernelParams: ${schema.spec.deployRamdisk.extraKernelParams}
+            disableDownloader: true
+          prometheusExporter:
+            enabled: ${schema.spec.prometheusExporter.enabled}
+            disableServiceMonitor: true
+          networking:
+            interface: ${schema.spec.networking.interface}
+            externalIP: ${schema.spec.networking.externalIP}
+            imageServerPort: ${schema.spec.networking.imageServerPort}
+            imageServerTLSPort: ${schema.spec.networking.imageServerTLSPort}
+          overrides:
+            initContainers:
+              # Custom file downloader using aria2c
+              - name: file-downloader
+                image: ${schema.spec.downloader.image}
+                securityContext:
+                  runAsUser: 997
+                  runAsGroup: 994
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    mkdir -p /shared/html/images
+                    cat > /tmp/input.txt << 'ARIA2EOF'
+                    ${schema.spec.downloader.config}
+                    ARIA2EOF
+                    aria2c \
+                      --input-file=/tmp/input.txt \
+                      --dir=/shared/html/images \
+                      --check-integrity=true \
+                      --continue=true \
+                      --max-connection-per-server=4 \
+                      --min-split-size=5M \
+                      --console-log-level=notice
+                volumeMounts:
+                  - name: ironic-shared
+                    mountPath: /shared
