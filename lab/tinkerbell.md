@@ -230,7 +230,6 @@ metadata:
   namespace: tinkerbell-system
 spec:
   name: capt-hcp
-  namespace: tinkerbell-system
   kubernetesVersion: v1.34.3
   gateway:
     name: hcp
@@ -258,7 +257,7 @@ EOF
 ## Watch provisioning progress
 
 ```bash
-watch kubectl get tinkerbellkubeadmstack,cluster,tinkerbellcluster,kubeadmcontrolplane,hostedcontrolplane,tinkerbellmachine,workflow -A
+watch kubectl get tinkerbellkubeadmcluster,tinkerbellkubeadmhostedcluster,cluster,tinkerbellcluster,kubeadmcontrolplane,hostedcontrolplane,tinkerbellmachine,workflow -A
 ```
 
 ## Extract child cluster kubeconfig

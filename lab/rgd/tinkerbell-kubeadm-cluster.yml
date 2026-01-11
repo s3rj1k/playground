@@ -8,7 +8,6 @@ spec:
     kind: TinkerbellKubeadmCluster
     spec:
       name: string
-      namespace: string | default=capi-system
       kubernetesVersion: string | default=v1.34.3
       controlPlaneEndpoint:
         host: string
@@ -41,7 +40,7 @@ spec:
         kind: HelmChartProxy
         metadata:
           name: cilium-${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           clusterSelector:
             matchLabels:
@@ -95,7 +94,7 @@ spec:
         kind: KubeadmControlPlane
         metadata:
           name: ${schema.spec.name}-control-plane
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           kubeadmConfigSpec:
             clusterConfiguration:
@@ -227,7 +226,7 @@ spec:
         kind: TinkerbellMachineTemplate
         metadata:
           name: ${schema.spec.name}-control-plane
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           template:
             spec:
@@ -330,7 +329,7 @@ spec:
         kind: TinkerbellMachineTemplate
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           template:
             spec:
@@ -433,7 +432,7 @@ spec:
         kind: KubeadmConfigTemplate
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           template:
             spec:
@@ -456,7 +455,7 @@ spec:
         kind: MachineDeployment
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
           labels:
             cluster.x-k8s.io/cluster-name: ${cluster.metadata.name}
             nodepool: worker-pool
@@ -492,7 +491,7 @@ spec:
         kind: TinkerbellCluster
         metadata:
           name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           controlPlaneEndpoint:
             host: ${schema.spec.controlPlaneEndpoint.host}.nip.io
@@ -509,7 +508,7 @@ spec:
         kind: Cluster
         metadata:
           name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
           labels:
             cluster.x-k8s.io/cluster-name: ${schema.spec.name}
             cni: cilium

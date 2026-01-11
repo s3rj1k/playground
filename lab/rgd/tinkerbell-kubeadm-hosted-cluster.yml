@@ -22,7 +22,6 @@ spec:
     kind: TinkerbellKubeadmHostedCluster
     spec:
       name: string
-      namespace: string | default=capi-system
       kubernetesVersion: string | default=v1.34.3
       gateway:
         name: string
@@ -54,7 +53,7 @@ spec:
         lockPassword: boolean | default=false
         sshAuthorizedKeys: "[]string | default=[]"
     status:
-      clusterReady: ${tinkerbellCluster.status.ready}
+      clusterReady: "${has(tinkerbellCluster.status) ? tinkerbellCluster.status.ready : false}"
   resources:
     # Gateway for HCP traffic
     - id: gateway
@@ -141,7 +140,7 @@ spec:
         kind: TLSRoute
         metadata:
           name: ${schema.spec.name}-api-legacy
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
           labels:
             cluster.x-k8s.io/cluster-name: ${schema.spec.name}
         spec:
@@ -151,7 +150,7 @@ spec:
               name: ${schema.spec.gateway.name}
               namespace: ${schema.spec.gateway.namespace}
           hostnames:
-            - "${schema.spec.name}.${schema.spec.namespace}.${schema.spec.gateway.ip}.nip.io"
+            - "${schema.spec.name}.${schema.metadata.namespace}.${schema.spec.gateway.ip}.nip.io"
           rules:
             - backendRefs:
                 - name: s-${schema.spec.name}
@@ -166,7 +165,7 @@ spec:
         kind: ConfigMap
         metadata:
           name: kube-vip-cloud-provider
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         data:
           range-global: ${schema.spec.kubevip.ipRange}
 
@@ -191,7 +190,7 @@ spec:
         kind: HostedControlPlane
         metadata:
           name: ${schema.spec.name}-control-plane
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           version: ${schema.spec.kubernetesVersion}
           replicas: ${schema.spec.controlPlane.replicas}
@@ -214,7 +213,7 @@ spec:
         kind: HelmChartProxy
         metadata:
           name: cilium-${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           clusterSelector:
             matchLabels:
@@ -226,7 +225,7 @@ spec:
           valuesTemplate: |
             ipam:
               mode: kubernetes
-            k8sServiceHost: ${schema.spec.name}.${schema.spec.namespace}.${schema.spec.gateway.ip}.nip.io
+            k8sServiceHost: ${schema.spec.name}.${schema.metadata.namespace}.${schema.spec.gateway.ip}.nip.io
             k8sServicePort: 6443
             tolerations:
               - key: node-role.kubernetes.io/control-plane
@@ -269,7 +268,7 @@ spec:
         kind: TinkerbellMachineTemplate
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           template:
             spec:
@@ -372,7 +371,7 @@ spec:
         kind: KubeadmConfigTemplate
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           template:
             spec:
@@ -395,7 +394,7 @@ spec:
         kind: MachineDeployment
         metadata:
           name: ${schema.spec.name}-worker
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
           labels:
             cluster.x-k8s.io/cluster-name: ${cluster.metadata.name}
             nodepool: worker-pool
@@ -431,7 +430,7 @@ spec:
         kind: TinkerbellCluster
         metadata:
           name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           imageLookupBaseRegistry: ${schema.spec.image.registry}
           imageLookupFormat: "{{.BaseRegistry}}/{{.OSDistro}}-{{.OSVersion}}:{{.KubernetesVersion}}.gz"
@@ -445,7 +444,7 @@ spec:
         kind: Cluster
         metadata:
           name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
           labels:
             cluster.x-k8s.io/cluster-name: ${schema.spec.name}
             cni: cilium

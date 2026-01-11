@@ -8,7 +8,6 @@ spec:
     kind: TinkerbellNode
     spec:
       name: string
-      namespace: string | default=capi-system
       role: string
       bmc:
         secretName: string
@@ -45,12 +44,12 @@ spec:
         kind: Machine
         metadata:
           name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
         spec:
           connection:
             authSecretRef:
               name: ${schema.spec.bmc.secretName}
-              namespace: ${schema.spec.namespace}
+              namespace: ${schema.metadata.namespace}
             host: ${schema.spec.bmc.host}
             insecureTLS: ${schema.spec.bmc.insecureTLS}
             port: ${schema.spec.bmc.port}
@@ -73,7 +72,7 @@ spec:
         kind: Hardware
         metadata:
           name: ${schema.spec.name}
-          namespace: ${schema.spec.namespace}
+          namespace: ${schema.metadata.namespace}
           labels:
             tinkerbell.org/role: ${schema.spec.role}
         spec:
