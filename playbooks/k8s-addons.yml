@@ -121,6 +121,7 @@
               namespace: flux-system
             spec:
               interval: 1h
+              releaseName: cert-manager
               targetNamespace: cert-manager-system
               chart:
                 spec:
@@ -196,6 +197,7 @@
               namespace: flux-system
             spec:
               interval: 1h
+              releaseName: traefik
               targetNamespace: traefik-system
               chart:
                 spec:
@@ -299,6 +301,7 @@
               namespace: flux-system
             spec:
               interval: 1h
+              releaseName: openebs
               targetNamespace: openebs-system
               chart:
                 spec:
@@ -366,6 +369,7 @@
               namespace: flux-system
             spec:
               interval: 1h
+              releaseName: local-path-provisioner
               targetNamespace: local-path-storage
               chart:
                 spec:
@@ -403,6 +407,7 @@
               namespace: flux-system
             spec:
               interval: 1h
+              releaseName: capi-operator
               targetNamespace: capi-operator-system
               chart:
                 spec:
@@ -450,6 +455,7 @@
               namespace: flux-system
             spec:
               interval: 1h
+              releaseName: kro
               targetNamespace: kro-system
               chart:
                 spec:

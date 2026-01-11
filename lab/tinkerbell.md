@@ -45,6 +45,9 @@ kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/
 ## Install CAPI Stack
 
 ```bash
+kubectl create namespace capi-system || true
+kubectl create namespace tinkerbell-system || true
+
 kubectl apply -f - <<EOF
 apiVersion: kro.run/v1alpha1
 kind: KubeadmStack
@@ -60,7 +63,7 @@ apiVersion: kro.run/v1alpha1
 kind: TinkerbellKubeadmStack
 metadata:
   name: tinkerbell
-  namespace: capi-system
+  namespace: tinkerbell-system
 spec:
   tinkerbellIP: "172.17.1.1"
   sourceInterface: virbr0
@@ -69,7 +72,7 @@ spec:
 EOF
 
 kubectl wait kubeadmstack/capi -n capi-system --for=condition=Ready --timeout=10m
-kubectl wait tinkerbellkubeadmstack/tinkerbell -n capi-system --for=condition=Ready --timeout=10m
+kubectl wait tinkerbellkubeadmstack/tinkerbell -n tinkerbell-system --for=condition=Ready --timeout=10m
 ```
 
 ---
@@ -82,7 +85,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: bmc-credentials
-  namespace: capi-system
+  namespace: tinkerbell-system
 type: Opaque
 stringData:
   username: admin
@@ -92,7 +95,7 @@ apiVersion: kro.run/v1alpha1
 kind: TinkerbellNode
 metadata:
   name: vm1
-  namespace: kro-system
+  namespace: tinkerbell-system
 spec:
   name: vm1
   role: control-plane
@@ -111,7 +114,7 @@ apiVersion: kro.run/v1alpha1
 kind: TinkerbellNode
 metadata:
   name: vm2
-  namespace: kro-system
+  namespace: tinkerbell-system
 spec:
   name: vm2
   role: control-plane
@@ -130,7 +133,7 @@ apiVersion: kro.run/v1alpha1
 kind: TinkerbellNode
 metadata:
   name: vm3
-  namespace: kro-system
+  namespace: tinkerbell-system
 spec:
   name: vm3
   role: control-plane
@@ -149,7 +152,7 @@ apiVersion: kro.run/v1alpha1
 kind: TinkerbellNode
 metadata:
   name: vm4
-  namespace: kro-system
+  namespace: tinkerbell-system
 spec:
   name: vm4
   role: worker
@@ -168,7 +171,7 @@ apiVersion: kro.run/v1alpha1
 kind: TinkerbellNode
 metadata:
   name: vm5
-  namespace: kro-system
+  namespace: tinkerbell-system
 spec:
   name: vm5
   role: worker
@@ -197,7 +200,7 @@ apiVersion: kro.run/v1alpha1
 kind: TinkerbellKubeadmCluster
 metadata:
   name: capt
-  namespace: kro-system
+  namespace: tinkerbell-system
 spec:
   name: capt
   controlPlaneEndpoint:
@@ -224,14 +227,14 @@ apiVersion: kro.run/v1alpha1
 kind: TinkerbellKubeadmHostedCluster
 metadata:
   name: capt-hcp
-  namespace: kro-system
+  namespace: tinkerbell-system
 spec:
   name: capt-hcp
-  namespace: capi-system
+  namespace: tinkerbell-system
   kubernetesVersion: v1.34.3
   gateway:
     name: hcp
-    namespace: capi-system
+    namespace: tinkerbell-system
     ip: "172.17.1.225"
   ciliumLB:
     ipRangeStart: "172.17.1.225"
@@ -261,8 +264,8 @@ watch kubectl get tinkerbellcluster,kubeadmcontrolplane,hostedcontrolplane,tinke
 ## Extract child cluster kubeconfig
 
 ```bash
-kubectl -n capi-system get secret capt-kubeconfig -o jsonpath='{.data.value}' | base64 -d > capt.kubeconfig
-kubectl -n capi-system get secret capt-hcp-kubeconfig -o jsonpath='{.data.value}' | base64 -d > capt-hcp.kubeconfig
+kubectl -n tinkerbell-system get secret capt-kubeconfig -o jsonpath='{.data.value}' | base64 -d > capt.kubeconfig
+kubectl -n tinkerbell-system get secret capt-hcp-kubeconfig -o jsonpath='{.data.value}' | base64 -d > capt-hcp.kubeconfig
 ```
 
 ## Test connectivity
