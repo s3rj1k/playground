@@ -20,6 +20,10 @@ spec:
         enabled: boolean | default=true
       ipam:
         enabled: boolean | default=true
+      mariadbOperator:
+        enabled: boolean | default=false
+      kyverno:
+        enabled: boolean | default=false
     status:
       infrastructureProviderReady: ${infrastructureProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       irsoCrdsReady: ${irsoCrds.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
@@ -27,6 +31,8 @@ spec:
       bmoCrdsReady: ${bmoCrds.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       bmoReady: ${bmoKustomization.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       ipamProviderReady: ${ipamProvider.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      mariadbOperatorReady: ${mariadbOperator.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      kyvernoReady: ${kyverno.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
   resources:
     # IRSO GitRepository source
     - id: irsoGitRepository
@@ -106,6 +112,12 @@ spec:
                     metadata:
                       labels:
                         app.kubernetes.io/name: ironic-standalone-operator
+                    spec:
+                      containers:
+                        - name: manager
+                          args:
+                            - --leader-elect
+                            - --feature-gates=HighAvailability=true
             - target:
                 kind: Service
                 name: webhook-service
@@ -229,3 +241,111 @@ spec:
           version: ${schema.spec.versions.ipamProvider}
           fetchConfig:
             url: https://github.com/metal3-io/ip-address-manager/releases/download/${schema.spec.versions.ipamProvider}/ipam-components.yaml
+
+    # MariaDB Operator Helm Repository
+    - id: mariadbOperatorHelmRepo
+      includeWhen:
+        - ${schema.spec.mariadbOperator.enabled}
+      template:
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: mariadb-operator
+          namespace: ${schema.metadata.namespace}
+        spec:
+          interval: 10m
+          url: https://helm.mariadb.com/mariadb-operator
+
+    # MariaDB Operator CRDs HelmRelease
+    - id: mariadbOperatorCrds
+      includeWhen:
+        - ${schema.spec.mariadbOperator.enabled}
+      readyWhen:
+        - ${mariadbOperatorCrds.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: mariadb-operator-crds
+          namespace: ${schema.metadata.namespace}
+        spec:
+          interval: 10m
+          chart:
+            spec:
+              chart: mariadb-operator-crds
+              sourceRef:
+                kind: HelmRepository
+                name: ${mariadbOperatorHelmRepo.metadata.name}
+          install:
+            crds: Create
+          upgrade:
+            crds: CreateReplace
+
+    # MariaDB Operator HelmRelease
+    - id: mariadbOperator
+      includeWhen:
+        - ${schema.spec.mariadbOperator.enabled}
+      readyWhen:
+        - ${mariadbOperator.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: mariadb-operator
+          namespace: ${schema.metadata.namespace}
+        spec:
+          interval: 10m
+          dependsOn:
+            - name: ${mariadbOperatorCrds.metadata.name}
+          chart:
+            spec:
+              chart: mariadb-operator
+              sourceRef:
+                kind: HelmRepository
+                name: ${mariadbOperatorHelmRepo.metadata.name}
+
+    # Kyverno Namespace
+    - id: kyvernoNamespace
+      includeWhen:
+        - ${schema.spec.kyverno.enabled}
+      template:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: kyverno-system
+
+    # Kyverno Helm Repository
+    - id: kyvernoHelmRepo
+      includeWhen:
+        - ${schema.spec.kyverno.enabled}
+      template:
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: kyverno
+          namespace: ${kyvernoNamespace.metadata.name}
+        spec:
+          interval: 10m
+          url: https://kyverno.github.io/kyverno/
+
+    # Kyverno HelmRelease
+    - id: kyverno
+      includeWhen:
+        - ${schema.spec.kyverno.enabled}
+      readyWhen:
+        - ${kyverno.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
+      template:
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: kyverno
+          namespace: ${kyvernoNamespace.metadata.name}
+        spec:
+          interval: 10m
+          chart:
+            spec:
+              chart: kyverno
+              sourceRef:
+                kind: HelmRepository
+                name: ${kyvernoHelmRepo.metadata.name}
+                namespace: ${kyvernoNamespace.metadata.name}

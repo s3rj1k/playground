@@ -1,26 +1,16 @@
-# Metal3 Lab
+# Metal3 Lab (High Availability)
 
 ## Setup Lab
 
 ```bash
-ansible-pull -U https://github.com/s3rj1k/playground.git -e "SUSHY_HACKS=false" playbooks/lab.yml
+ansible-pull -U https://github.com/s3rj1k/playground.git \
+  -e "SUSHY_HACKS=false" \
+  -e "LB_IP_RANGE_START=172.17.1.200" \
+  -e "LB_IP_RANGE_STOP=172.17.1.210" \
+  playbooks/lab.yml
 ```
 
-> **Note:** Use Debian/Ubuntu AMD64 VM
-
----
-
-## Create VMs
-
-```bash
-create-vm 1 virbr0
-create-vm 2 virbr0
-create-vm 3 virbr0
-create-vm 4 virbr0
-create-vm 5 virbr0
-```
-
-> **Note:** Script is installed by Ansible playbook
+> **Note:** Use Debian/Ubuntu AMD64 VM. The `LB_IP_RANGE_*` variables configure Cilium LoadBalancer IP pool on the provisioning network for CoreDNS.
 
 ---
 
@@ -29,13 +19,13 @@ create-vm 5 virbr0
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/kubeadm-stack.yml
 kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/metal3-kubeadm-stack.yml
-kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/metal3-ironic.yml
+kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/metal3-ironic-ha.yml
 kubectl apply -f https://raw.githubusercontent.com/s3rj1k/playground/refs/heads/main/lab/rgd/metal3-kubeadm-cluster.yml
 ```
 
 ---
 
-## Install CAPI Stack and Configure Ironic
+## Install CAPI Stack and Configure Ironic HA
 
 > **Note:** The `ironic-credentials-source` secret is user-managed and referenced by KRO to create a managed copy. This ensures credentials persist across Ironic CR recreations.
 
@@ -66,31 +56,53 @@ kind: Metal3KubeadmStack
 metadata:
   name: metal3
   namespace: metal3-system
-spec: {}
+spec:
+  mariadbOperator:
+    enabled: true
+  kyverno:
+    enabled: true
 EOF
 
 until kubectl apply -f - <<'EOF'
 apiVersion: kro.run/v1alpha1
-kind: Metal3Ironic
+kind: Metal3IronicHA
 metadata:
   name: ironic
   namespace: metal3-system
 spec:
   networking:
-    ipAddress: "172.17.1.1"
     interface: virbr0
-    dhcp:
-      networkCIDR: "172.17.1.0/24"
-      rangeBegin: "172.17.1.100"
-      rangeEnd: "172.17.1.199"
-      gatewayAddress: "172.17.1.1"
-      serveDNS: true
+  dns:
+    ipAddress: "172.17.1.1"
+    # Get clusterDNS with: kubectl get svc -n kube-system -l k8s-app=kube-dns -o jsonpath='{.items[0].spec.clusterIP}'
+    clusterDNS: "172.21.0.10"
+  tftp:
+    enabled: true
+    ipAddress: "172.17.1.1"
+    binaries: |
+      https://boot.ipxe.org/ipxe.efi
+        out=ipxe.efi
+      https://boot.ipxe.org/snponly.efi
+        out=snponly.efi
+      https://boot.ipxe.org/undionly.kpxe
+        out=undionly.kpxe
+  dhcp:
+    bindAddr: "0.0.0.0"
+    bindInterface: virbr0
+    serverIdentifier: "172.17.1.1"
+    tftpServer: "172.17.1.1"
+    bootFileUefi: "ipxe.efi"
+  provisionPool:
+    enabled: true
+    namePrefix: provision
+    gateway: "172.17.1.1"
+    prefix: 24
+    start: "172.17.1.100"
+    end: "172.17.1.199"
+    dnsServers: "172.17.1.200"
   deployRamdisk:
-    disableDownloader: true
     sshKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLrIiGjB4nPsyKzgzY21asVi/HKlveRnNY77vOhRhOA"
   downloader:
-    enabled: true
-    image: snowdreamtech/aria2:latest
     config: |
       https://s3rj1k.github.io/ironic-python-agent/ipa-amd64.kernel
         out=ironic-python-agent.kernel
@@ -102,16 +114,32 @@ spec:
         out=ironic-UBUNTU_24.04_NODE_IMAGE_K8S_v1.35.0.qcow2
         checksum=sha-256=bd5fffac09b576ffdc4fdb1ecb5ae1368793a184835c6caae685da33241e7795
 EOF
-do echo "Waiting for Metal3Ironic CRD..."; sleep 5; done
+do echo "Waiting for Metal3IronicHA CRD..."; sleep 5; done
 
 kubectl wait kubeadmstack/capi -n capi-system --for=condition=Ready --timeout=10m
 kubectl wait metal3kubeadmstack/metal3 -n metal3-system --for=condition=Ready --timeout=10m
-kubectl wait metal3ironic/ironic -n metal3-system --for=condition=Ready --timeout=10m
+kubectl wait metal3ironicha/ironic -n metal3-system --for=condition=Ready --timeout=10m
 ```
 
 ---
 
+## Create VMs
+
+```bash
+create-vm 1 virbr0
+create-vm 2 virbr0
+create-vm 3 virbr0
+create-vm 4 virbr0
+create-vm 5 virbr0
+```
+
+> **Note:** Script is installed by Ansible playbook
+
+---
+
 ## Create BareMetalHosts
+
+> **Note:** The `ipam.metal3.io/ip-pool` annotation triggers automatic IPClaim creation via Kyverno policy. Once set, this annotation is immutable.
 
 ```bash
 kubectl apply -f - <<EOF
@@ -172,6 +200,8 @@ metadata:
   namespace: metal3-system
   labels:
     cluster.x-k8s.io/control-plane: capm3-demo
+  annotations:
+    ipam.metal3.io/ip-pool: provision
 spec:
   automatedCleaningMode: disabled
   bmc:
@@ -191,6 +221,8 @@ metadata:
   namespace: metal3-system
   labels:
     cluster.x-k8s.io/control-plane: capm3-demo
+  annotations:
+    ipam.metal3.io/ip-pool: provision
 spec:
   automatedCleaningMode: disabled
   bmc:
@@ -210,6 +242,8 @@ metadata:
   namespace: metal3-system
   labels:
     cluster.x-k8s.io/control-plane: capm3-demo
+  annotations:
+    ipam.metal3.io/ip-pool: provision
 spec:
   automatedCleaningMode: disabled
   bmc:
@@ -229,6 +263,8 @@ metadata:
   namespace: metal3-system
   labels:
     cluster.x-k8s.io/worker: capm3-demo
+  annotations:
+    ipam.metal3.io/ip-pool: provision
 spec:
   automatedCleaningMode: disabled
   bmc:
@@ -248,6 +284,8 @@ metadata:
   namespace: metal3-system
   labels:
     cluster.x-k8s.io/worker: capm3-demo
+  annotations:
+    ipam.metal3.io/ip-pool: provision
 spec:
   automatedCleaningMode: disabled
   bmc:
@@ -260,77 +298,4 @@ spec:
   rootDeviceHints:
     serialNumber: "vm-disk-005"
 EOF
-```
-
----
-
-## Create Cluster
-
-> **Note:** The image URL points to the locally downloaded image served by Ironic's httpd. The `hostSelector.matchLabels` must match labels on your BareMetalHosts.
-
-```bash
-kubectl apply -f - <<'EOF'
-apiVersion: kro.run/v1alpha1
-kind: Metal3KubeadmCluster
-metadata:
-  name: capm3-demo
-  namespace: metal3-system
-spec:
-  name: capm3-demo
-  kubernetesVersion: v1.35.0
-  controlPlaneEndpoint:
-    host: 172.17.1.200
-  controlPlane:
-    replicas: 3
-    hostSelector:
-      matchLabels:
-        cluster.x-k8s.io/control-plane: capm3-demo
-  workers:
-    replicas: 1
-    hostSelector:
-      matchLabels:
-        cluster.x-k8s.io/worker: capm3-demo
-  image:
-    url: "http://172.17.1.1:6180/images/ironic-UBUNTU_24.04_NODE_IMAGE_K8S_v1.35.0.qcow2"
-    checksum: "bd5fffac09b576ffdc4fdb1ecb5ae1368793a184835c6caae685da33241e7795"
-    checksumType: sha256
-    format: qcow2
-  user:
-    name: metal3
-    passwordHash: '$6$4T0c76yU/h2z6D/G$xXvWk/J8AzTmctkOK2wnAv9LtcBrBMEwksnP3CaXMBYPYM8pjqSFgTcuWfuNc./csMFRknnbFq6v1z4QtGTtj1'
-    sshAuthorizedKeys:
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLrIiGjB4nPsyKzgzY21asVi/HKlveRnNY77vOhRhOA
-EOF
-```
-
----
-
-## Debug
-
-```bash
-kubectl get rgd
-kubectl get kubeadmstack,metal3kubeadmstack,metal3ironic -A
-kubectl get coreprovider,bootstrapprovider,controlplaneprovider,infrastructureprovider,ipamprovider -A
-kubectl get ironic -A
-kubectl get baremetalhost -A
-```
-
----
-
-## Watch provisioning progress
-
-```bash
-watch kubectl get cluster,metal3kubeadmcluster,metal3cluster,kubeadmcontrolplane,metal3machine,baremetalhost -A
-```
-
-## Extract child cluster kubeconfig
-
-```bash
-kubectl -n metal3-system get secret capm3-demo-kubeconfig -o jsonpath='{.data.value}' | base64 -d > capm3-demo.kubeconfig
-```
-
-## Test connectivity
-
-```bash
-kubectl --kubeconfig=capm3-demo.kubeconfig get nodes -o wide
 ```
