@@ -90,6 +90,33 @@ spec:
           targetNamespace: ${schema.metadata.namespace}
           wait: true
           timeout: 5m
+          patches:
+            # Fix webhook service selector - default selector is too generic and matches multiple pods
+            # Note: patches are applied BEFORE namePrefix, so use original names
+            - target:
+                kind: Deployment
+                name: controller-manager
+              patch: |
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: controller-manager
+                spec:
+                  template:
+                    metadata:
+                      labels:
+                        app.kubernetes.io/name: ironic-standalone-operator
+            - target:
+                kind: Service
+                name: webhook-service
+              patch: |
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  name: webhook-service
+                spec:
+                  selector:
+                    app.kubernetes.io/name: ironic-standalone-operator
 
     # BMO GitRepository source
     - id: bmoGitRepository
