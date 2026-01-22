@@ -1,0 +1,254 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 s3rj1k
+
+name: Build iPXE Binaries
+
+run-name: "Build iPXE with ${{ inputs.script_path }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      embed_script:
+        description: "Embed iPXE script"
+        required: false
+        default: true
+        type: boolean
+      script_path:
+        description: "iPXE script to embed"
+        required: false
+        default: "embed-scripts/autoboot.ipxe"
+        type: choice
+        options:
+          - embed-scripts/console.ipxe
+          - embed-scripts/autoboot.ipxe
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Run shellcheck
+        run: shellcheck dockerfiles/ipxe/scripts/*.sh
+
+  build-ipxe:
+    runs-on: ${{ matrix.runner }}
+    needs: shellcheck
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            platform: linux/amd64
+            dockerfile: Dockerfile.amd64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            dockerfile: Dockerfile.arm64
+
+    env:
+      DOCKER_BUILD_CHECKS_ANNOTATIONS: false
+      DOCKER_BUILD_SUMMARY: false
+      DOCKER_BUILD_RECORD_UPLOAD: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Determine script name
+        id: script
+        run: |
+          SCRIPT_PATH="${{ inputs.script_path }}"
+          SCRIPT_NAME=$(basename "${SCRIPT_PATH}" .ipxe)
+          echo "name=${SCRIPT_NAME}" >> $GITHUB_OUTPUT
+          echo "path=/usr/src/${SCRIPT_NAME}.ipxe" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build iPXE image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./dockerfiles/ipxe
+          file: ./dockerfiles/ipxe/${{ matrix.dockerfile }}
+          tags: ipxe-artifacts:${{ github.sha }}-${{ matrix.arch }}
+          load: true
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          build-args: |
+            EMBED_SCRIPT=${{ inputs.embed_script }}
+            IPXE_EMBED_SCRIPT=${{ steps.script.outputs.path }}
+
+      - name: Extract iPXE binaries from container
+        run: |
+          mkdir -p ./ipxe-binaries
+          docker create --name ipxe-extract ipxe-artifacts:${{ github.sha }}-${{ matrix.arch }}
+          docker cp ipxe-extract:/OUT/. ./ipxe-binaries/
+
+      - name: List artifacts
+        run: ls -lh ./ipxe-binaries/
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm ipxe-extract || true
+          docker image rm ipxe-artifacts:${{ github.sha }}-${{ matrix.arch }} || true
+
+      - name: Upload iPXE binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: ipxe-binaries-${{ steps.script.outputs.name }}-${{ matrix.arch }}
+          path: ./ipxe-binaries/
+          retention-days: 1
+          if-no-files-found: error
+
+  build-images:
+    runs-on: ubuntu-latest
+    needs: build-ipxe
+
+    env:
+      DOCKER_BUILD_CHECKS_ANNOTATIONS: false
+      DOCKER_BUILD_SUMMARY: false
+      DOCKER_BUILD_RECORD_UPLOAD: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Determine script name
+        id: script
+        run: |
+          SCRIPT_PATH="${{ inputs.script_path }}"
+          SCRIPT_NAME=$(basename "${SCRIPT_PATH}" .ipxe)
+          echo "name=${SCRIPT_NAME}" >> $GITHUB_OUTPUT
+          echo "path=/usr/src/${SCRIPT_NAME}.ipxe" >> $GITHUB_OUTPUT
+
+      - name: Download AMD64 binaries
+        uses: actions/download-artifact@v7
+        with:
+          name: ipxe-binaries-${{ steps.script.outputs.name }}-x86_64
+          path: ./ipxe-binaries-x86_64
+
+      - name: Download ARM64 binaries
+        uses: actions/download-artifact@v7
+        with:
+          name: ipxe-binaries-${{ steps.script.outputs.name }}-aarch64
+          path: ./ipxe-binaries-aarch64
+
+      - name: List downloaded artifacts
+        run: |
+          echo "AMD64 binaries:"
+          ls -lh ./ipxe-binaries-x86_64/
+          echo "ARM64 binaries:"
+          ls -lh ./ipxe-binaries-aarch64/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build iPXE images container
+        uses: docker/build-push-action@v6
+        with:
+          context: ./dockerfiles/ipxe
+          file: ./dockerfiles/ipxe/Dockerfile.images
+          tags: ipxe-images:${{ github.sha }}
+          load: true
+          provenance: false
+          sbom: false
+
+      - name: Create EFI images with snponly.efi (dual-arch)
+        run: |
+          mkdir -p ./output-snponly
+          docker run --rm \
+            -v ./ipxe-binaries-x86_64:/efi-binaries-amd64:ro \
+            -v ./ipxe-binaries-aarch64:/efi-binaries-arm64:ro \
+            -v ./output-snponly:/OUT \
+            ipxe-images:${{ github.sha }} \
+            /usr/local/bin/create-ipxe-image.sh \
+              --efi-amd64 /efi-binaries-amd64/snponly.efi \
+              --efi-arm64 /efi-binaries-arm64/snponly.efi \
+              --size 2880 \
+              --output /OUT/ipxe-efi-snponly-multiarch
+
+      - name: Create EFI images with ipxe.efi (AMD64)
+        run: |
+          mkdir -p ./output-ipxe
+          docker run --rm \
+            -v ./ipxe-binaries-x86_64:/efi-binaries-amd64:ro \
+            -v ./output-ipxe:/OUT \
+            ipxe-images:${{ github.sha }} \
+            /usr/local/bin/create-ipxe-image.sh \
+              --efi-amd64 /efi-binaries-amd64/ipxe.efi \
+              --output /OUT/ipxe-efi-full-amd64
+
+      - name: Create EFI images with ipxe.efi (ARM64)
+        run: |
+          docker run --rm \
+            -v ./ipxe-binaries-aarch64:/efi-binaries-arm64:ro \
+            -v ./output-ipxe:/OUT \
+            ipxe-images:${{ github.sha }} \
+            /usr/local/bin/create-ipxe-image.sh \
+              --efi-arm64 /efi-binaries-arm64/ipxe.efi \
+              --output /OUT/ipxe-efi-full-arm64
+
+      - name: Create GRUB EFI ISO (AMD64)
+        run: |
+          mkdir -p ./output-grub
+          docker run --rm \
+            -v ./ipxe-binaries-x86_64:/efi-binaries:ro \
+            -v ./output-grub:/OUT \
+            ipxe-images:${{ github.sha }} \
+            /usr/local/bin/create-grub-iso.sh \
+              --ipxe-amd64 /efi-binaries/ipxe.efi \
+              --output /OUT/ipxe-grub-efi-amd64.iso
+
+      - name: Create GRUB EFI ISO (ARM64)
+        run: |
+          docker run --rm \
+            -v ./ipxe-binaries-aarch64:/efi-binaries:ro \
+            -v ./output-grub:/OUT \
+            ipxe-images:${{ github.sha }} \
+            /usr/local/bin/create-grub-iso.sh \
+              --ipxe-arm64 /efi-binaries/ipxe.efi \
+              --output /OUT/ipxe-grub-efi-arm64.iso
+
+      - name: List generated images and ISOs
+        run: |
+          echo "EFI images with snponly.efi:"
+          ls -lh ./output-snponly/
+          echo "EFI images with ipxe.efi:"
+          ls -lh ./output-ipxe/
+          echo "GRUB EFI ISO:"
+          ls -lh ./output-grub/
+
+      - name: Upload EFI images (snponly)
+        uses: actions/upload-artifact@v6
+        with:
+          name: ipxe-efi-images-${{ steps.script.outputs.name }}-snponly
+          path: ./output-snponly/
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Upload EFI images (full)
+        uses: actions/upload-artifact@v6
+        with:
+          name: ipxe-efi-images-${{ steps.script.outputs.name }}-full
+          path: ./output-ipxe/
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Upload GRUB EFI ISOs
+        uses: actions/upload-artifact@v6
+        with:
+          name: ipxe-grub-efi-isos-${{ steps.script.outputs.name }}
+          path: ./output-grub/*.iso
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker image rm ipxe-images:${{ github.sha }} || true

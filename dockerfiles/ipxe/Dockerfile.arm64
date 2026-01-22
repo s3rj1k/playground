@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 s3rj1k
+
+FROM rockylinux/rockylinux:9
+
+ARG IPXE_RELEASE_BRANCH=v1.21.1
+ARG EMBED_SCRIPT=true
+ARG IPXE_EMBED_SCRIPT=/usr/src/console.ipxe
+
+ENV IPXE_REPO_PATH=/usr/src/ipxe
+ENV IPXE_OUT_DIR=/OUT
+
+RUN dnf install -y \
+    gcc \
+    git-core \
+    make \
+    mtools \
+    perl \
+    python3-setuptools \
+    xorriso \
+    xz-devel
+
+RUN git clone --depth 1 --branch "${IPXE_RELEASE_BRANCH}" \
+    "https://github.com/ipxe/ipxe.git" \
+    "${IPXE_REPO_PATH}"
+
+RUN sed -i \
+    -e 's/^\/\/#define[ \t]NEIGHBOUR_CMD/#define\tNEIGHBOUR_CMD/g' \
+    -e 's/^\/\/#define[ \t]NSLOOKUP_CMD/#define\tNSLOOKUP_CMD/g' \
+    -e 's/^\/\/#define[ \t]PING_CMD/#define\tPING_CMD/g' \
+    -e 's/^\/\/#define[ \t]REBOOT_CMD/#define\tREBOOT_CMD/g' \
+    -e 's/^\/\/#define[ \t]VLAN_CMD/#define\tVLAN_CMD/g' \
+    "${IPXE_REPO_PATH}/src/config/general.h"
+
+COPY embed-scripts/*.ipxe /usr/src/
+
+WORKDIR ${IPXE_REPO_PATH}/src
+
+RUN if [ "${EMBED_SCRIPT}" = "true" ]; then \
+        IPXE_BUILD_OPTIONS="NO_WERROR=1 EMBED=${IPXE_EMBED_SCRIPT}"; \
+    else \
+        IPXE_BUILD_OPTIONS="NO_WERROR=1"; \
+    fi && \
+    /usr/bin/make \
+    "bin-arm64-efi/snponly.efi" \
+    "bin-arm64-efi/ipxe.efi" \
+    ${IPXE_BUILD_OPTIONS}
+
+RUN mkdir -p "${IPXE_OUT_DIR}" && \
+    cp -v "${IPXE_REPO_PATH}/src/bin-arm64-efi/snponly.efi" \
+    "${IPXE_REPO_PATH}/src/bin-arm64-efi/ipxe.efi" \
+    "${IPXE_OUT_DIR}"

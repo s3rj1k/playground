@@ -1,0 +1,5 @@
+#!ipxe
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 s3rj1k
+
+shell
