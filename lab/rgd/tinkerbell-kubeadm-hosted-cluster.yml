@@ -386,6 +386,7 @@ spec:
                   lockPassword: ${schema.spec.user.lockPassword}
                   sshAuthorizedKeys: ${schema.spec.user.sshAuthorizedKeys}
                   sudo: ALL=(ALL) NOPASSWD:ALL
+                  shell: /bin/bash
 
     # Worker MachineDeployment
     - id: workerDeployment

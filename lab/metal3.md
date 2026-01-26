@@ -94,10 +94,10 @@ spec:
     config: |
       https://s3rj1k.github.io/ironic-python-agent/ipa-amd64.kernel
         out=ironic-python-agent.kernel
-        checksum=sha-256=560468155601807c27080040518c6ccbc3bd932bb3df917d7829d5d848488861
+        checksum=sha-256=0537a168cd6ff36253f5db40c4b8ed5daa541bad262f4ec8a99357ae24cb2c25
       https://s3rj1k.github.io/ironic-python-agent/ipa-amd64.initramfs
         out=ironic-python-agent.initramfs
-        checksum=sha-256=5bdaf83d4c82e68d4780be75581b21a02c6cde73c278cd586b52e55ce9016800
+        checksum=sha-256=d24ee12e83d7cab515cb171aeab5f6c8a131a46e321975d9ccb67e75f425995b
       https://artifactory.nordix.org/artifactory/metal3/images/k8s_v1.35.0/UBUNTU_24.04_NODE_IMAGE_K8S_v1.35.0.qcow2
         out=ironic-UBUNTU_24.04_NODE_IMAGE_K8S_v1.35.0.qcow2
         checksum=sha-256=bd5fffac09b576ffdc4fdb1ecb5ae1368793a184835c6caae685da33241e7795

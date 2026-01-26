@@ -12,9 +12,9 @@ spec:
       trustedProxies: string | default=10.244.0.0/16
       versions:
         tinkerbellProvider: string | default=v0.6.8
-        tinkerbellChart: string | default=v0.22.0
+        tinkerbellChart: string | default=v0.22.1
         kubeVip: string | default=v1.0.3
-        kubeVipCloudProvider: string | default=0.2.9
+        kubeVipCloudProvider: string | default=0.0.12
       isoURL: string | default=https://github.com/tinkerbell/hook/releases/download/latest/hook-x86_64-efi-initrd.iso
       rufioMetricsAddr: string | default=0.0.0.0:8085
       tinkControllerMetricsAddr: string | default=0.0.0.0:8084

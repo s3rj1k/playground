@@ -9,8 +9,8 @@ spec:
     spec:
       # Version Configuration
       versions:
-        clusterAPI: string | default=v1.12.1
-        addonHelm: string | default=v0.5.3
+        clusterAPI: string | default=v1.12.2
+        addonHelm: string | default=v0.6.0
         hostedControlPlane: string | default=v1.5.0
       # Feature Gates
       enableIgnition: boolean | default=false
