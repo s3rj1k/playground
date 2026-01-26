@@ -109,9 +109,7 @@
     - name: Configure kernel modules
       block:
         - name: Ensure required kernel modules are loaded
-          modprobe:
-            name: "{{ item }}"
-            state: present
+          shell: modprobe {{ item }}
           loop:
             - overlay
             - br_netfilter
@@ -138,19 +136,17 @@
     - name: Configure bridge netfilter for Cilium compatibility
       when: cilium_bridge_hacks | bool
       block:
-        - name: Disable bridge-nf-call-iptables for Cilium LB
-          sysctl:
-            name: net.bridge.bridge-nf-call-iptables
-            value: "0"
-            sysctl_file: /etc/sysctl.d/99-cilium-bridge.conf
-            reload: yes
+        - name: Configure bridge netfilter sysctl settings
+          copy:
+            dest: /etc/sysctl.d/99-cilium-bridge.conf
+            content: |
+              net.bridge.bridge-nf-call-iptables = 0
+              net.bridge.bridge-nf-call-ip6tables = 0
+            mode: "0644"
 
-        - name: Disable bridge-nf-call-ip6tables for Cilium LB
-          sysctl:
-            name: net.bridge.bridge-nf-call-ip6tables
-            value: "0"
-            sysctl_file: /etc/sysctl.d/99-cilium-bridge.conf
-            reload: yes
+        - name: Apply sysctl settings
+          command: sysctl --system
+          changed_when: false
 
     - name: Configure libvirt
       block:
@@ -172,6 +168,7 @@
               swtpm_user="swtpm"
               swtpm_group="swtpm"
           when: ansible_distribution == "Ubuntu"
+          notify: Restart libvirtd
 
         - name: Configure libvirt QEMU
           copy:
@@ -182,7 +179,7 @@
               group = "root"
               dynamic_ownership = 0
           when: ansible_distribution == "Debian"
-      notify: Restart libvirtd
+          notify: Restart libvirtd
 
     - name: Configure default libvirt storage pool
       block:
@@ -254,30 +251,25 @@
           ignore_errors: true
 
         - name: Define provisioning network
-          community.libvirt.virt_net:
-            command: define
-            name: "{{ provisioning_network.name }}"
-            xml: |
-              <network>
-                <name>{{ provisioning_network.name }}</name>
-                <forward mode='{{ provisioning_network.forward_mode | default("nat") }}'/>
-                <bridge name='{{ provisioning_network.bridge }}' stp='on' delay='0'/>
-                <dns enable='no'/>
-                <ip address='{{ provisioning_network.address }}' netmask='{{ provisioning_network.netmask }}'>
-                </ip>
-              </network>
+          shell: |
+            cat <<EOF | virsh net-define /dev/stdin
+            <network>
+              <name>{{ provisioning_network.name }}</name>
+              <forward mode='{{ provisioning_network.forward_mode | default("nat") }}'/>
+              <bridge name='{{ provisioning_network.bridge }}' stp='on' delay='0'/>
+              <dns enable='no'/>
+              <ip address='{{ provisioning_network.address }}' netmask='{{ provisioning_network.netmask }}'>
+              </ip>
+            </network>
+            EOF
           when: provisioning_net_correct.rc != 0
 
         - name: Start provisioning network
-          community.libvirt.virt_net:
-            command: start
-            name: "{{ provisioning_network.name }}"
+          command: virsh net-start {{ provisioning_network.name }}
           ignore_errors: true
 
         - name: Set provisioning network to autostart
-          community.libvirt.virt_net:
-            autostart: yes
-            name: "{{ provisioning_network.name }}"
+          command: virsh net-autostart {{ provisioning_network.name }}
 
     # Workaround for sushy-tools ignoring BootSourceOverrideEnabled with libvirt driver.
     # Sushy-tools always sets boot device as "continuous" (persistent), ignoring one-time boot requests.
@@ -369,7 +361,7 @@
               fi
 
               exit 0
-      notify: Restart libvirtd
+          notify: Restart libvirtd
 
     # Monitor domain reboot events to reset boot order (hooks don't catch guest-initiated reboots)
     - name: Configure libvirt reboot event monitor
@@ -578,6 +570,7 @@
               }
               SUSHY_EMULATOR_VMEDIA_VERIFY_SSL = False
             mode: "0644"
+          notify: Restart sushy-emulator
 
         - name: Create Sushy Tools startup script
           copy:
@@ -639,6 +632,7 @@
 
               [Install]
               WantedBy=multi-user.target
+          notify: Restart sushy-emulator
 
         - name: Create bash helper for Redfish commands
           copy:
@@ -744,7 +738,6 @@
             name: sushy-emulator
             enabled: yes
             state: started
-      notify: Restart sushy-emulator
 
     - name: Create VM helper script
       copy:

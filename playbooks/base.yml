@@ -188,48 +188,55 @@
             path: /etc/ssh/sshd_config
             regexp: "^\\s*#*\\s*Include"
             state: absent
+          notify: Restart sshd
 
         - name: Remove all PermitRootLogin lines
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: "^\\s*#*\\s*PermitRootLogin"
             state: absent
+          notify: Restart sshd
 
         - name: Configure root login restrictions
           lineinfile:
             path: /etc/ssh/sshd_config
             line: "PermitRootLogin prohibit-password"
             insertafter: EOF
+          notify: Restart sshd
 
         - name: Remove all PasswordAuthentication lines
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: "^\\s*#*\\s*PasswordAuthentication"
             state: absent
+          notify: Restart sshd
 
         - name: Disable password authentication
           lineinfile:
             path: /etc/ssh/sshd_config
             line: "PasswordAuthentication no"
             insertafter: EOF
+          notify: Restart sshd
 
         - name: Remove all PermitEmptyPasswords lines
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: "^\\s*#*\\s*PermitEmptyPasswords"
             state: absent
+          notify: Restart sshd
 
         - name: Disable empty passwords
           lineinfile:
             path: /etc/ssh/sshd_config
             line: "PermitEmptyPasswords no"
             insertafter: EOF
+          notify: Restart sshd
 
         - name: Remove cloud-init SSH configuration
           file:
             path: /etc/ssh/sshd_config.d/60-cloudimg-settings.conf
             state: absent
-      notify: Restart sshd
+          notify: Restart sshd
 
     - name: Configure and generate locale
       block:
@@ -246,12 +253,11 @@
     - name: Configure kernel modules
       block:
         - name: Ensure required kernel modules are loaded
-          modprobe:
-            name: "{{ item }}"
-            state: present
+          shell: modprobe {{ item }}
           loop:
             - overlay
             - br_netfilter
+          ignore_errors: true
 
         - name: Persist required kernel modules
           copy:

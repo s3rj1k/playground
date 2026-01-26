@@ -135,12 +135,11 @@
     - name: Configure kernel modules
       block:
         - name: Ensure required kernel modules are loaded
-          modprobe:
-            name: "{{ item }}"
-            state: present
+          shell: modprobe {{ item }}
           loop:
             - overlay
             - br_netfilter
+          ignore_errors: true
 
         - name: Persist required kernel modules
           copy:

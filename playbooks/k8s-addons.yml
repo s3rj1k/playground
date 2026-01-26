@@ -10,7 +10,7 @@
 - name: Kubernetes Addons via FluxCD
   hosts: localhost
   connection: local
-  become: false
+  become: true
   gather_facts: false
   vars:
     KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') | default('/root/.kube/config', true) }}"

@@ -94,31 +94,29 @@
                 group: root
 
             - name: Generate private key for TLS
-              openssl_privatekey:
+              command:
+                cmd: openssl genrsa -out /etc/zot/certs/zot.key 2048
+                creates: /etc/zot/certs/zot.key
+
+            - name: Set private key permissions
+              file:
                 path: /etc/zot/certs/zot.key
-                size: 2048
                 mode: "0600"
                 owner: root
                 group: root
 
-            - name: Generate certificate signing request
-              openssl_csr:
-                path: /etc/zot/certs/zot.csr
-                privatekey_path: /etc/zot/certs/zot.key
-                common_name: "{{ ansible_default_ipv4.address }}"
-                subject_alt_name:
-                  - "IP:{{ ansible_default_ipv4.address }}"
-                  - "DNS:{{ ansible_hostname }}"
-                  - "DNS:localhost"
-                  - "IP:127.0.0.1"
+            - name: Generate self-signed certificate with SAN
+              shell: |
+                openssl req -new -x509 -key /etc/zot/certs/zot.key \
+                  -out /etc/zot/certs/zot.crt -days 365 \
+                  -subj "/CN={{ ansible_default_ipv4.address }}" \
+                  -addext "subjectAltName=IP:{{ ansible_default_ipv4.address }},DNS:{{ ansible_hostname }},DNS:localhost,IP:127.0.0.1"
+              args:
+                creates: /etc/zot/certs/zot.crt
 
-            - name: Generate self-signed certificate
-              openssl_certificate:
+            - name: Set certificate permissions
+              file:
                 path: /etc/zot/certs/zot.crt
-                privatekey_path: /etc/zot/certs/zot.key
-                csr_path: /etc/zot/certs/zot.csr
-                provider: selfsigned
-                selfsigned_not_after: "+365d"
                 mode: "0644"
                 owner: root
                 group: root
