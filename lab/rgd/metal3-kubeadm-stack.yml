@@ -194,6 +194,13 @@ spec:
           timeout: 5m
           patches:
             - target:
+                kind: Deployment
+                name: controller-manager
+              patch: |
+                - op: replace
+                  path: /spec/template/spec/containers/0/image
+                  value: quay.io/metal3-io/baremetal-operator:${schema.spec.versions.bmo}
+            - target:
                 kind: Certificate
                 name: baremetal-operator-serving-cert
               patch: |

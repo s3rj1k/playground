@@ -110,13 +110,13 @@ spec:
     config: |
       https://s3rj1k.github.io/ironic-python-agent/ipa-amd64.kernel
         out=ironic-python-agent.kernel
-        checksum=sha-256=0537a168cd6ff36253f5db40c4b8ed5daa541bad262f4ec8a99357ae24cb2c25
+        checksum=sha-256=d0e37a2b5938147786ddd528d5228d926f6a7178148af184f4575efa9fcf146e
       https://s3rj1k.github.io/ironic-python-agent/ipa-amd64.initramfs
         out=ironic-python-agent.initramfs
-        checksum=sha-256=d24ee12e83d7cab515cb171aeab5f6c8a131a46e321975d9ccb67e75f425995b
+        checksum=sha-256=f2eb4d2c0b8381d25c72d3c76a91ed7bc4b202157d2d4298d2bc33ad72952782
       https://artifactory.nordix.org/artifactory/metal3/images/k8s_v1.35.0/UBUNTU_24.04_NODE_IMAGE_K8S_v1.35.0.qcow2
         out=ironic-UBUNTU_24.04_NODE_IMAGE_K8S_v1.35.0.qcow2
-        checksum=sha-256=bd5fffac09b576ffdc4fdb1ecb5ae1368793a184835c6caae685da33241e7795
+        checksum=sha-256=92a6679f2ce0d0005a2a2feba5333c0da5d3b3825b6737f0d0a11dd47a3664b0
 EOF
 do echo "Waiting for Metal3IronicHA CRD..."; sleep 5; done
 
