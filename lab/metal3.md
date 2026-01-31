@@ -84,7 +84,8 @@ spec:
       rangeBegin: "172.17.1.100"
       rangeEnd: "172.17.1.199"
       gatewayAddress: "172.17.1.1"
-      serveDNS: true
+      dnsAddress: "1.1.1.1"
+      serveDNS: false
   deployRamdisk:
     disableDownloader: true
     sshKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLrIiGjB4nPsyKzgzY21asVi/HKlveRnNY77vOhRhOA"
@@ -264,6 +265,113 @@ EOF
 
 ---
 
+## Provision Standalone VM
+
+This example shows how to provision a single VM with custom deployment method and cloud-init configuration.
+
+### Create BareMetalHost with Custom Deploy
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vm1-bmc
+  namespace: metal3-system
+type: Opaque
+stringData:
+  username: admin
+  password: password
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vm1-userdata
+  namespace: metal3-system
+stringData:
+  format: cloud-config
+  value: |
+    ## template: jinja
+    #cloud-config
+    users:
+      - name: metal3
+        shell: /bin/bash
+        passwd: '$6$rounds=656000$Ra8qhtBDvqoSUYiT$e/ShuXmj5Brl9Ud1Z1Exyrk8i8nsXR7ynQ1nl4QCJEAa74qdTzrkES4w83UF.vNHFDjs8cAcK6oTA4PWon9dU0'
+        lock_passwd: false
+        sudo: ALL=(ALL) NOPASSWD:ALL
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vm1-metadata
+  namespace: metal3-system
+stringData:
+  metaData: |
+    local-hostname: vm1
+    local_hostname: vm1
+    name: vm1
+    root_device_hints: "serial=vm-disk-001"
+    disk_wipe_mode: all
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vm1-network-data
+  namespace: metal3-system
+type: Opaque
+stringData:
+  networkData: |
+    links:
+      - id: eth0
+        name: eth0
+        type: phy
+        ethernet_mac_address: "52:54:00:12:34:01"
+    networks:
+      - id: network0
+        link: eth0
+        type: ipv4_dhcp
+    services:
+      - type: dns
+        address: 8.8.8.8
+---
+apiVersion: metal3.io/v1alpha1
+kind: BareMetalHost
+metadata:
+  name: vm1
+  namespace: metal3-system
+spec:
+  architecture: x86_64
+  # automatedCleaningMode: disabled
+  bmc:
+    # address: "redfish-virtualmedia://172.17.1.1:8000/redfish/v1/Systems/$(virsh domuuid vm1)"
+    address: "redfish://172.17.1.1:8000/redfish/v1/Systems/44759f4b-2f34-4ada-a923-bac345ef536a"
+    credentialsName: vm1-bmc
+    disableCertificateVerification: true
+  bootMACAddress: "52:54:00:12:34:01"
+  bootMode: UEFI
+  online: true
+  # rootDeviceHints:
+  #   serialNumber: "vm-disk-001"
+  image:
+    url: oci://debian:13
+  customDeploy:
+    method: "deb_oci_efi_lvm"
+  metaData:
+    name: vm1-metadata
+    namespace: metal3-system
+  userData:
+    name: vm1-userdata
+    namespace: metal3-system
+  networkData:
+    name: vm1-network-data
+    namespace: metal3-system
+EOF
+```
+
+> **Note:** Replace the BMC address UUID with the actual UUID from `virsh domuuid vm1`. The example uses OCI image deployment with custom deploy method `deb_oci_efi_lvm`.
+
+---
+
 ## Create Cluster
 
 > **Note:** The image URL points to the locally downloaded image served by Ironic's httpd. The `hostSelector.matchLabels` must match labels on your BareMetalHosts.
@@ -321,6 +429,10 @@ kubectl get baremetalhost -A
 
 ```bash
 watch kubectl get cluster,metal3kubeadmcluster,metal3cluster,kubeadmcontrolplane,metal3machine,baremetalhost -A
+```
+
+```bash
+watch 'kubectl -n metal3-system get pod ; echo ; kubectl -n metal3-system get bmh ; echo ; kubectl -n metal3-system get bmh -o jsonpath="{range .items[*]}{.metadata.name}{\"\t\"}{.status.errorMessage}{\"\n\"}{end}" ; echo ; virsh list --all'
 ```
 
 ## Extract child cluster kubeconfig
