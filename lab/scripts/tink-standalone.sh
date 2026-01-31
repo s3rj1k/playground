@@ -19,8 +19,8 @@ VM_NETMASK="${VM_NETMASK:-255.255.255.0}"
 VM_DISK="${VM_DISK:-/dev/vda}"
 VM_ARCH="${VM_ARCH:-x86_64}"
 
-# Boot mode: customboot, netboot, isoboot
-BOOT_MODE="${BOOT_MODE:-customboot}"
+# Boot mode: customboot-pxe, customboot-iso, netboot, isoboot
+BOOT_MODE="${BOOT_MODE:-customboot-pxe}"
 
 # OS Image
 OS_IMAGE="${OS_IMAGE:-ghcr.io/s3rj1k/playground/ubuntu-2404:v1.34.3.gz}"
@@ -37,16 +37,17 @@ usage() {
 Usage: $0 <vm-name> [options]
 
 Options:
-  -m, --mode <mode>    Boot mode: customboot, netboot, isoboot (default: customboot)
+  -m, --mode <mode>    Boot mode (default: customboot-pxe)
   -f, --force          Force cleanup existing resources before create
   -d, --delete         Delete all resources for the VM
   -s, --status         Show status of VM provisioning
   -h, --help           Show this help
 
 Boot Modes:
-  customboot  Full control with preparing and post actions (PXE boot, then disk boot)
-  netboot     Simple netboot mode (PXE boot only)
-  isoboot     Boot from ISO image (Tinkerbell-served by default)
+  customboot-pxe  Full BMC control with PXE boot, then disk boot (recommended)
+  customboot-iso  Full BMC control with ISO/virtual media boot, then disk boot
+  netboot         Simple netboot mode (PXE boot only, no post actions)
+  isoboot         Simple ISO boot mode (ISO boot only, eject after workflow)
 
 Environment variables:
   VM_MAC         MAC address (default: $VM_MAC)
@@ -55,19 +56,22 @@ Environment variables:
   VM_NETMASK     Netmask (default: $VM_NETMASK)
   VM_DISK        Disk device (default: $VM_DISK)
   OS_IMAGE       OS image URL (default: $OS_IMAGE)
-  ISO_URL        ISO URL for isoboot mode (default: Tinkerbell-served)
+  ISO_URL        ISO URL for isoboot/customboot-iso (default: Tinkerbell-served)
   TINKERBELL_IP  Tinkerbell server IP (default: $TINKERBELL_IP)
   BOOT_MODE      Boot mode (default: $BOOT_MODE)
 
 Examples:
-  # Provision with customboot (default)
+  # Provision with customboot-pxe (default)
   ./tink.sh vm1
 
-  # Provision with netboot
+  # Provision with customboot-iso (full lifecycle with virtual media)
+  ./tink.sh vm1 --mode customboot-iso
+
+  # Provision with netboot (simple PXE, no post actions)
   ./tink.sh vm1 --mode netboot
 
-  # Provision with ISO boot
-  ISO_URL=http://example.com/boot.iso ./tink.sh vm1 --mode isoboot
+  # Provision with isoboot (simple ISO, only ejects after)
+  ./tink.sh vm1 --mode isoboot
 
   # Force recreate
   ./tink.sh vm1 --force
@@ -238,7 +242,7 @@ spec:
             image: ghcr.io/jacobweinstock/waitdaemon:latest
             timeout: 90
             pid: host
-            command: ["sh", "-c", "echo o > /proc/sysrq-trigger"]
+            command: ["sh", "-c", "echo s > /proc/sysrq-trigger && sleep 1 && echo u > /proc/sysrq-trigger && sleep 1 && echo o > /proc/sysrq-trigger"]
             environment:
               IMAGE: alpine
               WAIT_SECONDS: 5
@@ -247,7 +251,7 @@ spec:
 EOF
 }
 
-create_workflow_customboot() {
+create_workflow_customboot_pxe() {
     cat <<EOF | kubectl apply -f -
 apiVersion: tinkerbell.org/v1alpha1
 kind: Workflow
@@ -275,6 +279,54 @@ spec:
             device: disk
             efiBoot: true
             persistent: true
+        - powerAction: "on"
+EOF
+}
+
+create_workflow_customboot_iso() {
+    # Convert MAC address to dash-delimited format for ISO URL
+    local mac_dashed
+    mac_dashed=$(echo "${VM_MAC}" | tr ':' '-')
+
+    # Use Tinkerbell-served ISO URL (smee serves on port 7171)
+    local iso_url="${ISO_URL:-http://${TINKERBELL_IP}:7171/iso/${mac_dashed}/hook.iso}"
+
+    cat <<EOF | kubectl apply -f -
+apiVersion: tinkerbell.org/v1alpha1
+kind: Workflow
+metadata:
+  name: ${VM_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  hardwareRef: ${VM_NAME}
+  templateRef: ${VM_NAME}
+  hardwareMap:
+    device_1: "${VM_MAC}"
+  bootOptions:
+    toggleAllowNetboot: true
+    bootMode: customboot
+    custombootConfig:
+      preparingActions:
+        - powerAction: "off"
+        - virtualMediaAction:
+            mediaURL: ""
+            kind: "CD"
+        - virtualMediaAction:
+            mediaURL: "${iso_url}"
+            kind: "CD"
+        - bootDevice:
+            device: "cdrom"
+            efiBoot: true
+        - powerAction: "on"
+      postActions:
+        - virtualMediaAction:
+            mediaURL: ""
+            kind: "CD"
+        - powerAction: "off"
+        - bootDevice:
+            device: "disk"
+            persistent: true
+            efiBoot: true
         - powerAction: "on"
 EOF
 }
@@ -412,10 +464,10 @@ done
 [[ -z "${VM_NAME}" ]] && usage
 
 case "${BOOT_MODE}" in
-    customboot|netboot|isoboot)
+    customboot-pxe|customboot-iso|netboot|isoboot)
         ;;
     *)
-        echo "ERROR: Invalid boot mode '${BOOT_MODE}'. Must be: customboot, netboot, or isoboot"
+        echo "ERROR: Invalid boot mode '${BOOT_MODE}'. Must be: customboot-pxe, customboot-iso, netboot, or isoboot"
         exit 1
         ;;
 esac
@@ -436,7 +488,7 @@ case "${ACTION}" in
         echo "  IP: ${VM_IP}"
         echo "  Disk: ${VM_DISK}"
         echo "  Image: ${OS_IMAGE}"
-        if [[ "${BOOT_MODE}" == "isoboot" ]]; then
+        if [[ "${BOOT_MODE}" == "isoboot" || "${BOOT_MODE}" == "customboot-iso" ]]; then
             echo "  ISO: ${ISO_URL:-http://${TINKERBELL_IP}:7171/iso/$(echo "${VM_MAC}" | tr ':' '-')/hook.iso}"
         fi
         echo
@@ -446,8 +498,11 @@ case "${ACTION}" in
         create_template
 
         case "${BOOT_MODE}" in
-            customboot)
-                create_workflow_customboot
+            customboot-pxe)
+                create_workflow_customboot_pxe
+                ;;
+            customboot-iso)
+                create_workflow_customboot_iso
                 ;;
             netboot)
                 create_workflow_netboot

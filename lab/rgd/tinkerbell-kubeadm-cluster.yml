@@ -316,7 +316,7 @@ spec:
                         image: ghcr.io/jacobweinstock/waitdaemon:latest
                         timeout: 90
                         pid: host
-                        command: ["shutdown"]
+                        command: ["sh", "-c", "echo s > /proc/sysrq-trigger && sleep 1 && echo u > /proc/sysrq-trigger && sleep 1 && echo o > /proc/sysrq-trigger"]
                         environment:
                           IMAGE: alpine
                           WAIT_SECONDS: 10
@@ -419,7 +419,7 @@ spec:
                         image: ghcr.io/jacobweinstock/waitdaemon:latest
                         timeout: 90
                         pid: host
-                        command: ["shutdown"]
+                        command: ["sh", "-c", "echo s > /proc/sysrq-trigger && sleep 1 && echo u > /proc/sysrq-trigger && sleep 1 && echo o > /proc/sysrq-trigger"]
                         environment:
                           IMAGE: alpine
                           WAIT_SECONDS: 10
