@@ -33,6 +33,7 @@ RESOURCES=(
     "tinkerbellkubeadmclusters.kro.run"
     "tinkerbellkubeadmhostedclusters.kro.run"
     "tinkerbellmachinetemplates.infrastructure.cluster.x-k8s.io"
+    "tinkerbellmachine.infrastructure.cluster.x-k8s.io"
 )
 
 for r in "${RESOURCES[@]}"; do force_delete "$r"; done
