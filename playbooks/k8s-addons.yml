@@ -460,7 +460,6 @@
               chart:
                 spec:
                   chart: kro
-                  version: v0.8.1
                   sourceRef:
                     kind: HelmRepository
                     name: kro
