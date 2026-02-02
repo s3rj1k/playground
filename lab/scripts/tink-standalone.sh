@@ -9,6 +9,8 @@ NAMESPACE="${NAMESPACE:-tinkerbell-system}"
 TINKERBELL_IP="${TINKERBELL_IP:-172.17.1.1}"
 REDFISH_PORT="${REDFISH_PORT:-8000}"
 BMC_SECRET="${BMC_SECRET:-bmc-credentials}"
+BMC_USERNAME="${BMC_USERNAME:-admin}"
+BMC_PASSWORD="${BMC_PASSWORD:-password}"
 
 # VM defaults
 VM_NAME=""
@@ -59,6 +61,9 @@ Environment variables:
   ISO_URL        ISO URL for isoboot/customboot-iso (default: Tinkerbell-served)
   TINKERBELL_IP  Tinkerbell server IP (default: $TINKERBELL_IP)
   BOOT_MODE      Boot mode (default: $BOOT_MODE)
+  BMC_USERNAME   BMC username (default: $BMC_USERNAME)
+  BMC_PASSWORD   BMC password (default: $BMC_PASSWORD)
+  BMC_SECRET     BMC secret name (default: $BMC_SECRET)
 
 Examples:
   # Provision with customboot-pxe (default)
@@ -80,6 +85,23 @@ Examples:
   ./tink.sh vm1 --delete
 EOF
     exit "${1:-1}"
+}
+
+create_bmc_secret() {
+    # Create BMC credentials secret if it doesn't exist
+    if ! kubectl get secret "${BMC_SECRET}" -n "${NAMESPACE}" &>/dev/null; then
+        cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BMC_SECRET}
+  namespace: ${NAMESPACE}
+type: Opaque
+stringData:
+  username: ${BMC_USERNAME:-admin}
+  password: ${BMC_PASSWORD:-password}
+EOF
+    fi
 }
 
 create_bmc_machine() {
@@ -408,6 +430,9 @@ delete_resources() {
     # Delete BMC machine
     kubectl delete machine.bmc "${VM_NAME}" -n "${NAMESPACE}" --ignore-not-found --wait=false
 
+    # Delete BMC credentials secret
+    kubectl delete secret "${BMC_SECRET}" -n "${NAMESPACE}" --ignore-not-found
+
     echo "Done."
 }
 
@@ -493,6 +518,7 @@ case "${ACTION}" in
         fi
         echo
 
+        create_bmc_secret
         create_bmc_machine
         create_hardware
         create_template
