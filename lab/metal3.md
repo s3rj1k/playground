@@ -80,6 +80,7 @@ spec:
     ipAddress: "172.17.1.1"
     interface: virbr0
     dhcp:
+      enabled: true
       networkCIDR: "172.17.1.0/24"
       rangeBegin: "172.17.1.100"
       rangeEnd: "172.17.1.199"
@@ -87,21 +88,18 @@ spec:
       dnsAddress: "1.1.1.1"
       serveDNS: false
   deployRamdisk:
-    disableDownloader: true
     sshKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKLrIiGjB4nPsyKzgzY21asVi/HKlveRnNY77vOhRhOA"
   downloader:
-    enabled: true
     image: snowdreamtech/aria2:latest
     config: |
       https://s3rj1k.github.io/ironic-python-agent/ipa-amd64.kernel
         out=ironic-python-agent.kernel
-        checksum=sha-256=d0e37a2b5938147786ddd528d5228d926f6a7178148af184f4575efa9fcf146e
+        checksum=sha-256=e308d55e2311c28eed5d7d6ec120713ead843901fd822ee9cb85012ad209cc4c
       https://s3rj1k.github.io/ironic-python-agent/ipa-amd64.initramfs
         out=ironic-python-agent.initramfs
-        checksum=sha-256=f2eb4d2c0b8381d25c72d3c76a91ed7bc4b202157d2d4298d2bc33ad72952782
+        checksum=sha-256=d16dfb1379ca07aafeafc86a2ed9b3856e473e0f6678bf6f82720dae8061b2e7
       https://artifactory.nordix.org/artifactory/metal3/images/k8s_v1.35.0/UBUNTU_24.04_NODE_IMAGE_K8S_v1.35.0.qcow2
         out=ironic-UBUNTU_24.04_NODE_IMAGE_K8S_v1.35.0.qcow2
-        checksum=sha-256=92a6679f2ce0d0005a2a2feba5333c0da5d3b3825b6737f0d0a11dd47a3664b0
 EOF
 do echo "Waiting for Metal3Ironic CRD..."; sleep 5; done
 

@@ -18,9 +18,9 @@ spec:
         imageServerTLSPort: integer | default=6183
         dhcp:
           enabled: boolean | default=true
-          networkCIDR: string
-          rangeBegin: string
-          rangeEnd: string
+          networkCIDR: string | default=""
+          rangeBegin: string | default=""
+          rangeEnd: string | default=""
           dnsAddress: string | default=""
           gatewayAddress: string | default=""
           serveDNS: boolean | default=false
@@ -32,10 +32,8 @@ spec:
       deployRamdisk:
         sshKey: string | default=""
         extraKernelParams: string | default=""
-        disableDownloader: boolean | default=false
-      # Generic file downloader (init container using aria2c)
+      # File downloader (init container using aria2c)
       downloader:
-        enabled: boolean | default=false
         image: string | default=snowdreamtech/aria2:latest
         config: string | default=""
       # Prometheus
@@ -46,7 +44,7 @@ spec:
         concurrency: integer | default=4
         provisioningLimit: integer | default=20
     status:
-      ironicReady: '${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True") || ironicWithDownloader.status.conditions.exists(c, c.type == "Ready" && c.status == "True") || ironicNoDHCP.status.conditions.exists(c, c.type == "Ready" && c.status == "True") || ironicWithDownloaderNoDHCP.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}'
+      ironicReady: '${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True") || ironicNoDHCP.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}'
   resources:
     # Ironic ConfigMap for BMO (endpoint configuration)
     - id: ironicConfigMap
@@ -156,10 +154,10 @@ spec:
             name: ${caIssuer.metadata.name}
             kind: Issuer
 
-    # Ironic instance (without custom downloader, DHCP enabled)
+    # Ironic instance (DHCP enabled)
     - id: ironic
       includeWhen:
-        - ${!schema.spec.downloader.enabled && schema.spec.networking.dhcp.enabled}
+        - ${schema.spec.networking.dhcp.enabled}
       readyWhen:
         - ${ironic.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       template:
@@ -176,44 +174,7 @@ spec:
           deployRamdisk:
             sshKey: ${schema.spec.deployRamdisk.sshKey}
             extraKernelParams: ${schema.spec.deployRamdisk.extraKernelParams}
-            disableDownloader: ${schema.spec.deployRamdisk.disableDownloader}
-          prometheusExporter:
-            enabled: ${schema.spec.prometheusExporter.enabled}
-          networking:
-            interface: ${schema.spec.networking.interface}
-            ipAddress: ${schema.spec.networking.ipAddress}
-            externalIP: ${schema.spec.networking.externalIP}
-            imageServerPort: ${schema.spec.networking.imageServerPort}
-            imageServerTLSPort: ${schema.spec.networking.imageServerTLSPort}
-            dhcp:
-              networkCIDR: ${schema.spec.networking.dhcp.networkCIDR}
-              rangeBegin: ${schema.spec.networking.dhcp.rangeBegin}
-              rangeEnd: ${schema.spec.networking.dhcp.rangeEnd}
-              dnsAddress: ${schema.spec.networking.dhcp.dnsAddress}
-              gatewayAddress: ${schema.spec.networking.dhcp.gatewayAddress}
-              serveDNS: ${schema.spec.networking.dhcp.serveDNS}
-
-    # Ironic instance (with custom downloader init container, DHCP enabled)
-    - id: ironicWithDownloader
-      includeWhen:
-        - ${schema.spec.downloader.enabled && schema.spec.networking.dhcp.enabled}
-      readyWhen:
-        - ${ironicWithDownloader.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      template:
-        apiVersion: ironic.metal3.io/v1alpha1
-        kind: Ironic
-        metadata:
-          name: ironic
-          namespace: ${schema.metadata.namespace}
-        spec:
-          apiCredentialsName: ${ironicCredentials.metadata.name}
-          tls:
-            certificateName: ironic-tls
-            disableVirtualMediaTLS: ${schema.spec.tls.disableVirtualMediaTLS}
-          deployRamdisk:
-            sshKey: ${schema.spec.deployRamdisk.sshKey}
-            extraKernelParams: ${schema.spec.deployRamdisk.extraKernelParams}
-            disableDownloader: ${schema.spec.deployRamdisk.disableDownloader}
+            disableDownloader: true
           prometheusExporter:
             enabled: ${schema.spec.prometheusExporter.enabled}
           networking:
@@ -256,10 +217,10 @@ spec:
                   - name: ironic-shared
                     mountPath: /shared
 
-    # Ironic instance (without custom downloader, DHCP disabled)
+    # Ironic instance (DHCP disabled)
     - id: ironicNoDHCP
       includeWhen:
-        - ${!schema.spec.downloader.enabled && !schema.spec.networking.dhcp.enabled}
+        - ${!schema.spec.networking.dhcp.enabled}
       readyWhen:
         - ${ironicNoDHCP.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
       template:
@@ -276,7 +237,7 @@ spec:
           deployRamdisk:
             sshKey: ${schema.spec.deployRamdisk.sshKey}
             extraKernelParams: ${schema.spec.deployRamdisk.extraKernelParams}
-            disableDownloader: ${schema.spec.deployRamdisk.disableDownloader}
+            disableDownloader: true
           prometheusExporter:
             enabled: ${schema.spec.prometheusExporter.enabled}
           networking:
@@ -285,57 +246,6 @@ spec:
             externalIP: ${schema.spec.networking.externalIP}
             imageServerPort: ${schema.spec.networking.imageServerPort}
             imageServerTLSPort: ${schema.spec.networking.imageServerTLSPort}
-            dhcp:
-              networkCIDR: ${schema.spec.networking.dhcp.networkCIDR}
-              rangeBegin: ${schema.spec.networking.dhcp.rangeBegin}
-              rangeEnd: ${schema.spec.networking.dhcp.rangeEnd}
-              dnsAddress: ${schema.spec.networking.dhcp.dnsAddress}
-              gatewayAddress: ${schema.spec.networking.dhcp.gatewayAddress}
-              serveDNS: ${schema.spec.networking.dhcp.serveDNS}
-          overrides:
-            containers:
-              - name: dnsmasq
-                image: registry.k8s.io/pause:3.10.1
-                command: ["/pause"]
-                args: []
-                env: []
-
-    # Ironic instance (with custom downloader init container, DHCP disabled)
-    - id: ironicWithDownloaderNoDHCP
-      includeWhen:
-        - ${schema.spec.downloader.enabled && !schema.spec.networking.dhcp.enabled}
-      readyWhen:
-        - ${ironicWithDownloaderNoDHCP.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      template:
-        apiVersion: ironic.metal3.io/v1alpha1
-        kind: Ironic
-        metadata:
-          name: ironic
-          namespace: ${schema.metadata.namespace}
-        spec:
-          apiCredentialsName: ${ironicCredentials.metadata.name}
-          tls:
-            certificateName: ironic-tls
-            disableVirtualMediaTLS: ${schema.spec.tls.disableVirtualMediaTLS}
-          deployRamdisk:
-            sshKey: ${schema.spec.deployRamdisk.sshKey}
-            extraKernelParams: ${schema.spec.deployRamdisk.extraKernelParams}
-            disableDownloader: ${schema.spec.deployRamdisk.disableDownloader}
-          prometheusExporter:
-            enabled: ${schema.spec.prometheusExporter.enabled}
-          networking:
-            interface: ${schema.spec.networking.interface}
-            ipAddress: ${schema.spec.networking.ipAddress}
-            externalIP: ${schema.spec.networking.externalIP}
-            imageServerPort: ${schema.spec.networking.imageServerPort}
-            imageServerTLSPort: ${schema.spec.networking.imageServerTLSPort}
-            dhcp:
-              networkCIDR: ${schema.spec.networking.dhcp.networkCIDR}
-              rangeBegin: ${schema.spec.networking.dhcp.rangeBegin}
-              rangeEnd: ${schema.spec.networking.dhcp.rangeEnd}
-              dnsAddress: ${schema.spec.networking.dhcp.dnsAddress}
-              gatewayAddress: ${schema.spec.networking.dhcp.gatewayAddress}
-              serveDNS: ${schema.spec.networking.dhcp.serveDNS}
           overrides:
             containers:
               - name: dnsmasq
