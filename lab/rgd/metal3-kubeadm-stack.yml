@@ -18,6 +18,7 @@ spec:
         enabled: boolean | default=true
       bmo:
         enabled: boolean | default=true
+        preprovisioningImage: boolean | default=false
       ipam:
         enabled: boolean | default=true
       mariadbOperator:
@@ -216,6 +217,23 @@ spec:
                 - op: replace
                   path: /metadata/annotations/cert-manager.io~1inject-ca-from
                   value: ${schema.metadata.namespace}/baremetal-operator-serving-cert
+            - target:
+                kind: Deployment
+                name: controller-manager
+              patch: |
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: controller-manager
+                spec:
+                  template:
+                    spec:
+                      containers:
+                        - name: manager
+                          args:
+                            - --enable-leader-election
+                            - --tls-min-version=TLS13
+                            - --build-preprov-image=${string(schema.spec.bmo.preprovisioningImage)}
 
     # Metal3 Infrastructure Provider
     - id: infrastructureProvider
