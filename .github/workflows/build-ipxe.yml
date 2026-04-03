@@ -65,10 +65,10 @@ jobs:
           echo "path=/usr/src/${SCRIPT_NAME}.ipxe" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build iPXE image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./dockerfiles/ipxe
           file: ./dockerfiles/ipxe/${{ matrix.dockerfile }}
@@ -99,7 +99,7 @@ jobs:
           docker image rm ipxe-artifacts:${{ github.sha }}-${{ matrix.arch }} || true
 
       - name: Upload iPXE binaries
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ipxe-binaries-${{ steps.script.outputs.name }}-${{ matrix.arch }}
           path: ./ipxe-binaries/
@@ -128,13 +128,13 @@ jobs:
           echo "path=/usr/src/${SCRIPT_NAME}.ipxe" >> $GITHUB_OUTPUT
 
       - name: Download AMD64 binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ipxe-binaries-${{ steps.script.outputs.name }}-x86_64
           path: ./ipxe-binaries-x86_64
 
       - name: Download ARM64 binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ipxe-binaries-${{ steps.script.outputs.name }}-aarch64
           path: ./ipxe-binaries-aarch64
@@ -147,10 +147,10 @@ jobs:
           ls -lh ./ipxe-binaries-aarch64/
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build iPXE images container
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./dockerfiles/ipxe
           file: ./dockerfiles/ipxe/Dockerfile.images
@@ -225,7 +225,7 @@ jobs:
           ls -lh ./output-grub/
 
       - name: Upload EFI images (snponly)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ipxe-efi-images-${{ steps.script.outputs.name }}-snponly
           path: ./output-snponly/
@@ -233,7 +233,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload EFI images (full)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ipxe-efi-images-${{ steps.script.outputs.name }}-full
           path: ./output-ipxe/
@@ -241,7 +241,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload GRUB EFI ISOs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ipxe-grub-efi-isos-${{ steps.script.outputs.name }}
           path: ./output-grub/*.iso
