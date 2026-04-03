@@ -13,6 +13,19 @@ on:
         required: false
         default: true
         type: boolean
+      ipxe_repo:
+        description: "iPXE source repository"
+        required: false
+        default: "https://github.com/s3rj1k/ipxe-apipa.git"
+        type: choice
+        options:
+          - https://github.com/ipxe/ipxe.git
+          - https://github.com/s3rj1k/ipxe-apipa.git
+      ipxe_ref:
+        description: "iPXE branch/tag to build"
+        required: false
+        default: "APIPA"
+        type: string
       script_path:
         description: "iPXE script to embed"
         required: false
@@ -80,6 +93,8 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           build-args: |
+            IPXE_REPO_URL=${{ inputs.ipxe_repo }}
+            IPXE_RELEASE_BRANCH=${{ inputs.ipxe_ref }}
             EMBED_SCRIPT=${{ inputs.embed_script }}
             IPXE_EMBED_SCRIPT=${{ steps.script.outputs.path }}
 

@@ -3,7 +3,8 @@
 
 FROM rockylinux/rockylinux:9
 
-ARG IPXE_RELEASE_BRANCH=v1.21.1
+ARG IPXE_REPO_URL=https://github.com/s3rj1k/ipxe-apipa.git
+ARG IPXE_RELEASE_BRANCH=APIPA
 ARG EMBED_SCRIPT=true
 ARG IPXE_EMBED_SCRIPT=/usr/src/console.ipxe
 
@@ -22,7 +23,7 @@ RUN dnf install -y \
     xz-devel
 
 RUN git clone --depth 1 --branch "${IPXE_RELEASE_BRANCH}" \
-    "https://github.com/ipxe/ipxe.git" \
+    "${IPXE_REPO_URL}" \
     "${IPXE_REPO_PATH}"
 
 RUN sed -i 's/^\/\/#define[ \t]CONSOLE_SERIAL/#define\tCONSOLE_SERIAL/g' \
