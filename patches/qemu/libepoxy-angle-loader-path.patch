@@ -1,0 +1,20 @@
+diff --git a/src/dispatch_common.c b/src/dispatch_common.c
+index 6fb7f02..6daac6e 100644
+--- a/src/dispatch_common.c
++++ b/src/dispatch_common.c
+@@ -177,10 +177,12 @@
+ #include <TargetConditionals.h>
+ #if TARGET_OS_OSX
+ #define GLX_LIB "/opt/X11/lib/libGL.1.dylib"
+-#define EGL_LIB "EGL.framework/Versions/Current/EGL"
++/* Load ANGLE via @loader_path so the bundled libEGL/libGLESv2 next to
++ * libepoxy are found without DYLD_* env vars (stripped by SIP under sudo). */
++#define EGL_LIB "@loader_path/libEGL.dylib"
+ #define OPENGL_LIB "/System/Library/Frameworks/OpenGL.framework/Versions/Current/OpenGL"
+-#define GLES1_LIB "GLESv1_CM.framework/Versions/Current/GLESv1_CM"
+-#define GLES2_LIB "GLESv2.framework/Versions/Current/GLESv2"
++#define GLES1_LIB "@loader_path/libGLESv1_CM.dylib"
++#define GLES2_LIB "@loader_path/libGLESv2.dylib"
+ #elif TARGET_OS_IPHONE
+ #define GLX_LIB "/opt/X11/lib/libGL.1.dylib"
+ #define EGL_LIB "EGL.framework/EGL"

@@ -1,0 +1,23 @@
+diff --git a/src/venus/vkr_library.c b/src/venus/vkr_library.c
+index 94b21a3..feb44f0 100644
+--- a/src/venus/vkr_library.c
++++ b/src/venus/vkr_library.c
+@@ -43,7 +43,17 @@ vkr_library_load(struct vulkan_library *lib)
+       return true;
+ 
+ #ifdef __APPLE__
+-   lib->handle = dlopen("libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
++   /* Prefer a Vulkan loader co-located with this dylib (the QEMU bundle's
++    * lib/). @loader_path is resolved by dyld from the path string itself, so
++    * it works even when DYLD_* env vars are stripped (SIP under sudo). We probe
++    * the loader (libvulkan), not libMoltenVK, so the loader still discovers the
++    * ICD via VK_DRIVER_FILES; bare-name fallbacks below keep non-bundle use
++    * (Linux, system Vulkan SDK) working. */
++   lib->handle = dlopen("@loader_path/libvulkan.1.dylib", RTLD_NOW | RTLD_LOCAL);
++   if (lib->handle == NULL)
++      lib->handle = dlopen("@loader_path/libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
++   if (lib->handle == NULL)
++      lib->handle = dlopen("libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
+    if (lib->handle == NULL)
+       lib->handle = dlopen("libvulkan.1.dylib", RTLD_NOW | RTLD_LOCAL);
+    if (lib->handle == NULL)

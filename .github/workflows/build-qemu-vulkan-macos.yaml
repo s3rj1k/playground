@@ -1,0 +1,552 @@
+name: Build QEMU with Vulkan (venus) support
+
+# Approach adapted from:
+# https://gist.github.com/osy/a8f705050eed1c8421ad1a0855a8faa9
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build on Apple Silicon
+    runs-on: macos-26
+    timeout-minutes: 180
+
+    permissions:
+      contents: read
+
+    # *_SHA pins below sourced from utmapp/UTM patches/sources:
+    # https://github.com/utmapp/UTM/blob/main/patches/sources
+    # QEMU pinned manually to current submit/macos-venus HEAD.
+    # CACHE_VERSION: bump to invalidate all build caches after changing build flags.
+    env:
+      WEBKIT_SHA:    ed78ab6e1a37f4f11583a0bd038f22ec91f3ff10
+      EPOXY_SHA:     5014658f79e4d6872a1ad6754da9098ccd9d4fc5
+      VIRGL_SHA:     d48a2d0d9a722fffd3f92c83e71d9426a4892a66
+      QEMU_SHA:      f714f0e3370e8b4858a249ebaf6522f19b2fd97f
+      MOLTENVK_SHA:  111c14f3abf5c00118fc7a5b00c92d7abbf40f62
+      CACHE_VERSION: v1
+      CCACHE_DIR:    ${{ github.workspace }}/.ccache
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: workspace
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Homebrew prerequisites
+        working-directory: ${{ github.workspace }}
+        run: brew install ccache glib meson pixman pkg-config spice-protocol vulkan-headers vulkan-loader
+
+      - name: Install Python prerequisites (PyYAML for virglrenderer/gallium)
+        working-directory: ${{ github.workspace }}
+        run: python3 -m pip install --break-system-packages pyyaml
+
+      - name: Capture toolchain fingerprint
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eux
+          XCODE_VER=$(xcodebuild -version | head -1 | awk '{print $2}')
+          echo "TOOLCHAIN_KEY=arm64-xcode-${XCODE_VER}" >> "$GITHUB_ENV"
+
+      - name: Create workspace
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eux
+          mkdir -p workspace/build/qemu \
+                   workspace/source/libepoxy \
+                   workspace/source/virglrenderer \
+                   workspace/source/qemu \
+                   workspace/source/MoltenVK \
+                   workspace/prefix/libepoxy \
+                   workspace/prefix/virglrenderer \
+                   workspace/prefix/qemu \
+                   workspace/var
+
+      # ─── Sources (cloned fresh each run — clones are NOT cached). Patched repos
+      #     commit the patch so the build caches below key off the patched commit. ───
+
+      - name: Clone WebKit (ANGLE, sparse checkout)
+        run: |
+          set -eux
+          [ -d source/WebKit ] || git clone --filter=tree:0 --no-checkout https://github.com/utmapp/WebKit.git source/WebKit
+          git -C source/WebKit sparse-checkout init
+          git -C source/WebKit sparse-checkout set Source/ThirdParty/ANGLE Configurations Tools/ccache
+          git -C source/WebKit checkout "$WEBKIT_SHA"
+
+      - name: Clone + patch libepoxy (utmapp, pinned)
+        id: clone-epoxy
+        run: |
+          set -eux
+          git -C source/libepoxy init
+          git -C source/libepoxy fetch --filter=blob:none https://github.com/utmapp/libepoxy.git "$EPOXY_SHA"
+          git -C source/libepoxy checkout FETCH_HEAD
+          # Load ANGLE EGL/GLES via @loader_path (survives SIP's DYLD_* stripping
+          # under sudo). Commit the patch with a FIXED identity/date so the commit
+          # hash is reproducible — it becomes the build cache key below, so a patch
+          # change -> new commit -> build cache miss -> rebuild (no manual clearing).
+          git -C source/libepoxy apply "$GITHUB_WORKSPACE/patches/qemu/libepoxy-angle-loader-path.patch"
+          GIT_AUTHOR_NAME=ci GIT_AUTHOR_EMAIL=ci@local \
+          GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@local \
+          GIT_AUTHOR_DATE="1970-01-01T00:00:00Z" GIT_COMMITTER_DATE="1970-01-01T00:00:00Z" \
+            git -C source/libepoxy commit -aqm "venus: load ANGLE via @loader_path"
+          echo "rev=$(git -C source/libepoxy rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Clone + patch virglrenderer (utmapp, pinned)
+        id: clone-virgl
+        run: |
+          set -eux
+          git -C source/virglrenderer init
+          git -C source/virglrenderer fetch --filter=blob:none https://github.com/utmapp/virglrenderer.git "$VIRGL_SHA"
+          git -C source/virglrenderer checkout FETCH_HEAD
+          # venus dlopen of the bundled Vulkan loader via @loader_path (survives SIP
+          # under sudo). Commit with a FIXED identity/date for a reproducible commit
+          # hash that drives the build cache key below.
+          git -C source/virglrenderer apply "$GITHUB_WORKSPACE/patches/qemu/virglrenderer-venus-loader-path.patch"
+          GIT_AUTHOR_NAME=ci GIT_AUTHOR_EMAIL=ci@local \
+          GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@local \
+          GIT_AUTHOR_DATE="1970-01-01T00:00:00Z" GIT_COMMITTER_DATE="1970-01-01T00:00:00Z" \
+            git -C source/virglrenderer commit -aqm "venus: dlopen Vulkan loader via @loader_path"
+          echo "rev=$(git -C source/virglrenderer rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Clone QEMU (utmapp, pinned)
+        run: |
+          set -eux
+          git -C source/qemu init
+          git -C source/qemu fetch --filter=blob:none https://github.com/utmapp/qemu.git "$QEMU_SHA"
+          git -C source/qemu checkout FETCH_HEAD
+
+      # ─── ccache (shared across all C/C++ builds; xcodebuild ignores CC) ───
+
+      - name: Cache - ccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key:  ccache-${{ env.CACHE_VERSION }}-${{ env.TOOLCHAIN_KEY }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ env.CACHE_VERSION }}-${{ env.TOOLCHAIN_KEY }}-
+
+      # ─── Builds (per-component output caches; skip build on cache hit) ────
+
+      - name: Cache build - ANGLE
+        id: cache-build-angle
+        uses: actions/cache@v5
+        with:
+          path: workspace/build/ANGLE.xcarchive
+          key: angle-${{ env.CACHE_VERSION }}-${{ env.WEBKIT_SHA }}-${{ env.TOOLCHAIN_KEY }}
+
+      - name: Build ANGLE
+        # GCC_TREAT_WARNINGS_AS_ERRORS=NO: pinned WebKit predates clang 17+ warnings (unnecessary-virtual-specifier, nontrivial-memcall, ...).
+        if: steps.cache-build-angle.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          pushd source/WebKit/Source/ThirdParty/ANGLE
+          xcodebuild archive \
+            -archivePath "../../../../../build/ANGLE" \
+            -scheme "ANGLE" \
+            -sdk macosx \
+            -arch arm64 \
+            -configuration Release \
+            WEBCORE_LIBRARY_DIR="/usr/local/lib" \
+            NORMAL_UMBRELLA_FRAMEWORKS_DIR="" \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET="11.0" \
+            GCC_TREAT_WARNINGS_AS_ERRORS=NO
+          popd
+
+      - name: Cache build - libepoxy
+        id: cache-build-epoxy
+        uses: actions/cache@v5
+        with:
+          path: workspace/prefix/libepoxy
+          key: epoxy-${{ env.CACHE_VERSION }}-${{ steps.clone-epoxy.outputs.rev }}-${{ env.TOOLCHAIN_KEY }}
+
+      - name: Build libepoxy
+        if: steps.cache-build-epoxy.outputs.cache-hit != 'true'
+        env:
+          CC:  ccache cc
+          CXX: ccache c++
+        run: |
+          set -eux
+          [ -e build/libepoxy/meson-info ] || meson setup \
+            "-Dc_args=-I$PWD/source/WebKit/Source/ThirdParty/ANGLE/include" \
+            -Degl=yes -Dx11=false \
+            "--prefix=$PWD/prefix/libepoxy" \
+            build/libepoxy source/libepoxy
+          meson install -C build/libepoxy
+
+      - name: Cache build - virglrenderer
+        id: cache-build-virgl
+        uses: actions/cache@v5
+        with:
+          path: workspace/prefix/virglrenderer
+          key: virgl-${{ env.CACHE_VERSION }}-${{ steps.clone-virgl.outputs.rev }}-epoxy-${{ steps.clone-epoxy.outputs.rev }}-${{ env.TOOLCHAIN_KEY }}
+
+      - name: Build virglrenderer
+        # c_std=gnu2x: pinned source has label-followed-by-decl, allowed in C23+ but a hard error in clang's C11.
+        if: steps.cache-build-virgl.outputs.cache-hit != 'true'
+        env:
+          CC:  ccache cc
+          CXX: ccache c++
+        run: |
+          set -eux
+          [ -e build/virglrenderer/meson-info ] || meson setup \
+            "-Dc_args=-I$PWD/source/WebKit/Source/ThirdParty/ANGLE/include" \
+            -Dc_std=gnu2x \
+            -Dvenus=true -Dcheck-gl-errors=false \
+            "--pkg-config-path=$PWD/prefix/libepoxy/lib/pkgconfig" \
+            "--prefix=$PWD/prefix/virglrenderer" \
+            build/virglrenderer source/virglrenderer
+          meson install -C build/virglrenderer
+
+      - name: Cache build - QEMU
+        id: cache-build-qemu
+        uses: actions/cache@v5
+        with:
+          path: |
+            workspace/prefix/qemu
+            workspace/var
+          key: qemu-${{ env.CACHE_VERSION }}-${{ env.QEMU_SHA }}-virgl-${{ env.VIRGL_SHA }}-epoxy-${{ env.EPOXY_SHA }}-${{ env.TOOLCHAIN_KEY }}
+
+      - name: Build QEMU
+        if: steps.cache-build-qemu.outputs.cache-hit != 'true'
+        env:
+          CC:  ccache cc
+          CXX: ccache c++
+        run: |
+          set -eux
+          cd build/qemu
+          PKG_CONFIG_PATH="$PWD/../../prefix/libepoxy/lib/pkgconfig:$PWD/../../prefix/virglrenderer/lib/pkgconfig" ../../source/qemu/configure \
+            "--extra-cflags=-I$PWD/../../source/WebKit/Source/ThirdParty/ANGLE/include" \
+            "--extra-ldflags=-L$PWD/../ANGLE.xcarchive/Products/usr/local/lib" \
+            "--prefix=$PWD/../../prefix/qemu" \
+            --target-list=aarch64-softmmu
+          make "-j$(getconf _NPROCESSORS_ONLN)" install
+          [ -e ../../var/edk2-arm-vars.fd ] || cp pc-bios/edk2-arm-vars.fd ../../var
+
+      # MoltenVK builds in-tree, so source + build output share one cache.
+      - name: Cache MoltenVK (source + build output)
+        id: cache-moltenvk
+        uses: actions/cache@v5
+        with:
+          path: workspace/source/MoltenVK
+          key: moltenvk-${{ env.CACHE_VERSION }}-${{ env.MOLTENVK_SHA }}-${{ env.TOOLCHAIN_KEY }}
+
+      - name: Clone MoltenVK (utmapp, pinned)
+        if: steps.cache-moltenvk.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          git -C source/MoltenVK init
+          git -C source/MoltenVK fetch --filter=blob:none https://github.com/utmapp/MoltenVK.git "$MOLTENVK_SHA"
+          git -C source/MoltenVK checkout FETCH_HEAD
+
+      - name: Build MoltenVK
+        # No `if` gate: git-clean strips the in-tree Package/ before the cache
+        # post-step saves, so a cache hit does not imply the build output exists.
+        # The self-check makes the step idempotent for runs where Package/ is present.
+        run: |
+          set -eux
+          [ -d source/MoltenVK/Package ] && exit 0
+          cd source/MoltenVK
+          ./fetchDependencies --macos
+          make macos
+
+      # ─── Bundle ───────────────────────────────────────────────────────────
+
+      - name: Generate run wrapper
+        run: |
+          set -eux
+          cat > run <<'EOF'
+          #!/bin/bash
+          d="$(dirname "${BASH_SOURCE[0]}")"
+          _env=(
+            # DYLD_* is intentionally NOT set: SIP strips DYLD_* when qemu is
+            # launched via sudo (vmnet), so libraries resolve through baked
+            # @loader_path / install names + the venus/libepoxy dlopen patches.
+            # The VK_*/MVK_/ANGLE_ vars below are not DYLD_*, so they survive sudo.
+            VK_DRIVER_FILES="$d/source/MoltenVK/Package/Latest/MoltenVK/dylib/macOS/MoltenVK_icd.json"
+            VK_ADD_DRIVER_FILES="$d/source/MoltenVK/Package/Latest/MoltenVK/dylib/macOS/MoltenVK_icd.json"
+            MVK_ALLOW_METAL_EVENTS=1
+            ANGLE_DEFAULT_PLATFORM=metal
+          )
+          # QEMU_VULKAN_DEBUG=1 ./run → verbose Vulkan-loader + MoltenVK output
+          if [ "${QEMU_VULKAN_DEBUG:-0}" = "1" ]; then
+            _env+=(VK_LOADER_DEBUG=all MVK_CONFIG_LOG_LEVEL=4)
+          fi
+          exec sudo "${_env[@]}" "$d/bin/qemu-system-aarch64" \
+            -machine virt,accel=hvf \
+            -cpu host \
+            -smp "$(getconf _NPROCESSORS_ONLN)" \
+            -m 8G \
+            -device pcie-root-port,id=pcie \
+            -device virtio-sound-pci,addr=0x0.0x0,bus=pcie,multifunction=on,audiodev=audio,streams=1 \
+            -device virtio-gpu-gl-pci,hostmem=8G,blob=true,venus=true,addr=0x0.0x1,bus=pcie \
+            -device virtio-keyboard-pci,addr=0x0.0x2,bus=pcie \
+            -device virtio-net-pci,addr=0x0.0x3,bus=pcie,netdev=net \
+            -device virtio-rng-pci,addr=0x0.0x4,bus=pcie \
+            -display cocoa,gl=es \
+            -drive "if=pflash,format=raw,file=$d/share/qemu/edk2-aarch64-code.fd,readonly=on" \
+            -drive "if=pflash,format=raw,file=$d/var/edk2-arm-vars.fd" \
+            -drive "id=virtio,if=none,format=raw,file=$d/var/virtio.raw,discard=on" \
+            -device virtio-blk-pci,addr=0x0.0x5,backend_defaults=on,bus=pcie,drive=virtio \
+            -audiodev coreaudio,id=audio,out.fixed-settings=false \
+            -netdev vmnet-shared,id=net \
+            -chardev qemu-vdagent,id=spice,name=vdagent,clipboard=on \
+            -device virtio-serial-pci,addr=0x0.0x6,bus=pcie \
+            -device virtserialport,chardev=spice,name=com.redhat.spice.0 \
+            -run-with user="$(id -u):$(id -g)" \
+            "$@"
+          EOF
+          chmod a+x run
+
+      - name: Stage release bundle
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eux
+          mkdir -p out/qemu-vulkan-arm64/lib
+          cp -R workspace/prefix/qemu/bin                                out/qemu-vulkan-arm64/
+          cp -R workspace/prefix/qemu/share                              out/qemu-vulkan-arm64/
+          cp -R workspace/prefix/libepoxy/lib/.                          out/qemu-vulkan-arm64/lib/
+          cp -R workspace/prefix/virglrenderer/lib/.                     out/qemu-vulkan-arm64/lib/
+          # virglrenderer's venus backend dlopen's the Vulkan loader at runtime
+          # (no Mach-O link dep, so _collect can't find it). Copy it into lib/; the
+          # venus patch dlopen's "@loader_path/libvulkan.1.dylib", so it resolves
+          # without DYLD_* (which SIP strips under sudo). The symlink covers bare
+          # "libvulkan.dylib" probes.
+          _vk_lib=$(brew --prefix vulkan-loader)/lib
+          cp "$_vk_lib/libvulkan.1.dylib" out/qemu-vulkan-arm64/lib/
+          chmod u+w out/qemu-vulkan-arm64/lib/libvulkan.1.dylib
+          ln -sf libvulkan.1.dylib out/qemu-vulkan-arm64/lib/libvulkan.dylib
+          # ANGLE (libEGL/libGLESv2/...) must sit beside libepoxy so the libepoxy
+          # patch can dlopen "@loader_path/libEGL.dylib" without DYLD_FRAMEWORK_PATH.
+          # Copy before _collect so any transitive Homebrew deps are captured too.
+          cp workspace/build/ANGLE.xcarchive/Products/usr/local/lib/*.dylib out/qemu-vulkan-arm64/lib/
+          chmod u+w out/qemu-vulkan-arm64/lib/*.dylib
+          # Bundle every Homebrew dylib needed by any binary, transitively.
+          # After copying, rewrite install names so each binary resolves its Homebrew
+          # deps via @executable_path/../lib (no wrapper env var required).
+          _visited=$(mktemp)
+          _collect() {
+            otool -L "$1" 2>/dev/null | awk '/^\t.*\/opt\/homebrew\//{print $1}' | while read -r _lib; do
+              _base=$(basename "$_lib")
+              grep -qxF "$_base" "$_visited" && continue
+              printf '%s\n' "$_base" >> "$_visited"
+              cp "$_lib" out/qemu-vulkan-arm64/lib/
+              chmod u+w "out/qemu-vulkan-arm64/lib/$_base"
+              _collect "$_lib"
+            done
+          }
+          for _bin in out/qemu-vulkan-arm64/bin/*; do
+            [ -f "$_bin" ] && _collect "$_bin"
+          done
+          # Also scan prefix dylibs (libvirglrenderer, libepoxy) and the
+          # explicitly staged libvulkan for any transitive Homebrew deps.
+          for _dylib in out/qemu-vulkan-arm64/lib/*.dylib; do
+            [ -f "$_dylib" ] && _collect "$_dylib"
+          done
+          rm -f "$_visited"
+          # Normalize install names so every NON-system dependency resolves inside
+          # the bundle without DYLD_* (SIP strips DYLD_* under sudo). System libs
+          # (/usr/lib, /System/Library) and already-@ paths stay as-is. This single
+          # pass covers Homebrew deps, the build-prefix epoxy/virgl cross-refs, AND
+          # ANGLE's /WebCore.framework/Frameworks/lib*.dylib ids + interdeps — all of
+          # which now live in lib/.
+          _external() { case "$1" in /usr/lib/*|/System/Library/*|@*) return 1;; *) return 0;; esac; }
+          # Binaries: external deps → @executable_path/../lib/<name>
+          for _bin in out/qemu-vulkan-arm64/bin/*; do
+            [ -f "$_bin" ] || continue
+            otool -L "$_bin" 2>/dev/null | tail -n +2 | awk '{print $1}' | while read -r _orig; do
+              _external "$_orig" || continue
+              install_name_tool -change "$_orig" "@executable_path/../lib/$(basename "$_orig")" "$_bin" 2>/dev/null || true
+            done
+          done
+          # Dylibs: set id + rewrite external deps → @loader_path/<name>
+          for _dylib in out/qemu-vulkan-arm64/lib/*.dylib; do
+            [ -f "$_dylib" ] || continue
+            [ -L "$_dylib" ] && continue
+            _id=$(otool -D "$_dylib" 2>/dev/null | tail -n +2 | head -1)
+            if [ -n "$_id" ] && _external "$_id"; then
+              install_name_tool -id "@loader_path/$(basename "$_dylib")" "$_dylib" 2>/dev/null || true
+            fi
+            otool -L "$_dylib" 2>/dev/null | tail -n +2 | awk '{print $1}' | while read -r _orig; do
+              _external "$_orig" || continue
+              install_name_tool -change "$_orig" "@loader_path/$(basename "$_orig")" "$_dylib" 2>/dev/null || true
+            done
+          done
+          # install_name_tool invalidates Mach-O signatures; re-sign everything with
+          # an ad-hoc identity, preserving existing entitlements (HVF/vmnet for qemu).
+          for _f in out/qemu-vulkan-arm64/bin/* out/qemu-vulkan-arm64/lib/*.dylib; do
+            [ -f "$_f" ] || continue
+            codesign --sign - --force --preserve-metadata=entitlements "$_f" 2>/dev/null || \
+              codesign --sign - --force "$_f" 2>/dev/null || true
+          done
+          cp -R workspace/var                                            out/qemu-vulkan-arm64/
+          cp    workspace/run                                            out/qemu-vulkan-arm64/
+          mkdir -p out/qemu-vulkan-arm64/source/MoltenVK/Package/Latest
+          # Package/Latest is a symlink created by make via `git describe --tags`.
+          # Fetching a bare SHA without tags can leave it broken; use find -L to
+          # locate the real versioned MoltenVK directory regardless of symlink state.
+          moltenvk_pkg=$(find -L workspace/source/MoltenVK/Package \
+            -mindepth 2 -maxdepth 2 -name MoltenVK -type d | head -1)
+          [ -n "$moltenvk_pkg" ] || {
+            echo "MoltenVK package not found; Package tree:"; \
+            find workspace/source/MoltenVK/Package -maxdepth 3 2>/dev/null; \
+            exit 1; \
+          }
+          cp -R "$moltenvk_pkg"                                           out/qemu-vulkan-arm64/source/MoltenVK/Package/Latest/
+          # libMoltenVK lives outside lib/, so the re-sign loop above skipped it.
+          # Ad-hoc re-sign defensively so the Vulkan loader can dlopen it under SIP.
+          codesign --sign - --force \
+            "out/qemu-vulkan-arm64/source/MoltenVK/Package/Latest/MoltenVK/dylib/macOS/libMoltenVK.dylib" 2>/dev/null || true
+
+      - name: Verify bundle is relocatable and signed
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eu
+          cd out/qemu-vulkan-arm64
+          fail=0
+          _check() {
+            file "$1" | grep -q 'Mach-O' || return 0
+            if otool -L "$1" | tail -n +2 | grep -Eq '/opt/homebrew/|/WebCore\.framework/|workspace/prefix/|/Users/'; then
+              echo "ERROR: $1 still references an absolute/build path:"
+              otool -L "$1" | tail -n +2 | grep -E '/opt/homebrew/|/WebCore\.framework/|workspace/prefix/|/Users/'
+              fail=1
+            fi
+            codesign --verify --strict "$1" || { echo "ERROR: $1 failed codesign --verify"; fail=1; }
+          }
+          for _f in bin/* lib/*.dylib \
+                    source/MoltenVK/Package/Latest/MoltenVK/dylib/macOS/libMoltenVK.dylib; do
+            [ -f "$_f" ] && _check "$_f"
+          done
+          echo "=== loader/ANGLE resolution (expect @loader_path / @executable_path) ==="
+          otool -L lib/libEGL.dylib             | tail -n +2 || true
+          otool -L lib/libvirglrenderer.1.dylib | tail -n +2 || true
+          echo "=== MoltenVK ICD manifest (library_path must be bundle-relative) ==="
+          cat source/MoltenVK/Package/Latest/MoltenVK/dylib/macOS/MoltenVK_icd.json
+          echo "=== patches actually compiled in (a STALE CACHE silently ships unpatched libs) ==="
+          # The dlopen targets are compiled-in string constants, invisible to otool -L.
+          # libepoxy must load ANGLE via @loader_path; if not, it dlopen's the
+          # "GLESv2.framework/..." path, which fails under sudo and segfaults
+          # (the exact crash seen before the fix).
+          strings lib/libepoxy.0.dylib | grep -q '@loader_path/libGLESv2.dylib' || {
+            echo "ERROR: libepoxy is UNPATCHED — the @loader_path patch did not reach the build (see the 'Clone + patch libepoxy' step)"; fail=1; }
+          # venus must dlopen the bundled loader via @loader_path; if not, virgl_renderer_init -> -1.
+          strings lib/libvirglrenderer.1.dylib | grep -q '@loader_path/libvulkan' || {
+            echo "ERROR: virglrenderer is UNPATCHED — the @loader_path patch did not reach the build (see the 'Clone + patch virglrenderer' step)"; fail=1; }
+          # ANGLE dylibs must sit beside libepoxy for the @loader_path dlopens to resolve.
+          for _a in libEGL.dylib libGLESv2.dylib; do
+            [ -f "lib/$_a" ] || { echo "ERROR: lib/$_a missing from the bundle"; fail=1; }
+          done
+          [ "$fail" -eq 0 ] || { echo "Bundle verification FAILED"; exit 1; }
+          echo "Bundle verification PASSED"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: qemu-vulkan-arm64
+          path: out/qemu-vulkan-arm64
+          if-no-files-found: error
+
+      - name: Record source commits
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eux
+          mkdir -p out/qemu-vulkan-arm64-sources
+          {
+            for d in workspace/source/*/; do
+              name="$(basename "$d")"
+              sha="$(git -C "$d" rev-parse HEAD)"
+              printf '%s\t%s\n' "$name" "$sha"
+            done
+          } > out/qemu-vulkan-arm64-sources/COMMITS.txt
+
+      - name: Clean source trees (strip build artifacts before archiving)
+        run: |
+          set -eux
+          for d in source/*/; do
+            # MoltenVK builds in-tree; skip it so Package/ survives into the cache.
+            [ "$(basename "$d")" = MoltenVK ] && continue
+            git -C "$d" clean -xfd
+          done
+
+      - name: Archive sources
+        working-directory: ${{ github.workspace }}
+        env:
+          XZ_OPT: '-9e -T0'
+        run: |
+          set -eux
+          tar -C workspace -cJf out/qemu-vulkan-arm64-sources/sources.tar.xz \
+            --exclude='.git' \
+            --exclude='source/MoltenVK/Package' \
+            --exclude='source/MoltenVK/External' \
+            source
+
+      - name: Upload sources artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: qemu-vulkan-arm64-sources
+          path: out/qemu-vulkan-arm64-sources
+          if-no-files-found: error
+
+      - name: Stage Pages content
+        working-directory: ${{ github.workspace }}
+        env:
+          XZ_OPT: '-9e -T0'
+        run: |
+          set -eux
+          mkdir -p pages-out
+          tar -C out -cJf pages-out/qemu-vulkan-arm64.tar.xz qemu-vulkan-arm64
+          cp out/qemu-vulkan-arm64-sources/sources.tar.xz pages-out/
+          cp out/qemu-vulkan-arm64-sources/COMMITS.txt    pages-out/
+          ( cd pages-out && shasum -a 256 qemu-vulkan-arm64.tar.xz > qemu-vulkan-arm64.tar.xz.sha256 )
+          ( cd pages-out && shasum -a 256 sources.tar.xz         > sources.tar.xz.sha256 )
+          cat > pages-out/index.html <<EOF
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>QEMU + Vulkan (venus) &mdash; macOS arm64</title>
+          <style>body{font-family:-apple-system,sans-serif;max-width:720px;margin:2em auto;padding:0 1em;line-height:1.5}code,pre{font-family:ui-monospace,monospace;font-size:.9em}pre{background:#f3f3f3;padding:.8em;border-radius:4px;overflow-x:auto}ol li{margin:.4em 0}</style>
+          <h1>QEMU + Vulkan (venus) &mdash; macOS arm64</h1>
+          <p>Built from <a href="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"><code>${{ github.sha }}</code></a> on <code>${{ github.ref_name }}</code>.</p>
+          <ul>
+            <li><a href="qemu-vulkan-arm64.tar.xz">qemu-vulkan-arm64.tar.xz</a> &middot; <a href="qemu-vulkan-arm64.tar.xz.sha256">sha256</a></li>
+            <li><a href="sources.tar.xz">sources.tar.xz</a> &middot; <a href="sources.tar.xz.sha256">sha256</a> &middot; <a href="COMMITS.txt">COMMITS.txt</a></li>
+          </ul>
+          <h2>Getting started</h2>
+          <ol>
+            <li>Download and extract the bundle, then remove the quarantine flag:<pre><code>tar -xJf qemu-vulkan-arm64.tar.xz
+          xattr -rd com.apple.quarantine qemu-vulkan-arm64</code></pre></li>
+            <li>Create a virtual disk image (sparse &mdash; only consumes space as data is written):<pre><code>./qemu-vulkan-arm64/bin/qemu-img create -f raw qemu-vulkan-arm64/var/virtio.raw 64G</code></pre></li>
+            <li>Download an ARM64 Linux ISO, e.g. Ubuntu:<pre><code>curl -LO https://cdimage.ubuntu.com/releases/25.10/release/ubuntu-25.10-desktop-arm64.iso</code></pre></li>
+            <li>Boot from the ISO to install:<pre><code>./qemu-vulkan-arm64/run -cdrom ubuntu-25.10-desktop-arm64.iso</code></pre></li>
+            <li>After installation, boot normally:<pre><code>./qemu-vulkan-arm64/run</code></pre></li>
+          </ol>
+          EOF
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: pages-out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
