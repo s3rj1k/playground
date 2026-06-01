@@ -295,7 +295,7 @@
 
               DOMAIN="$1"
               TMPFILE=$(mktemp)
-              trap "rm -f $TMPFILE" EXIT
+              trap 'rm -f "$TMPFILE"' EXIT
 
               virsh dumpxml --inactive "$DOMAIN" > "$TMPFILE" 2>/dev/null || exit 0
 
@@ -481,7 +481,7 @@
         - name: Install Sushy Tools and dependencies in virtual environment
           pip:
             name:
-              - sushy-tools==2.1.0
+              - sushy-tools==2.2.0
               - libvirt-python
             virtualenv: /opt/sushy-tools/venv
             virtualenv_command: python3 -m venv
@@ -581,22 +581,23 @@
               set -eux -o pipefail
 
               CONFIG="${SUSHY_TOOLS_CONFIG:-/etc/sushy/sushy-emulator.conf}"
-              ARGS=""
+              ARGS=()
 
               if [[ -f "${CONFIG}" ]]; then
-                  ARGS="${ARGS} --config ${CONFIG}"
+                  ARGS+=(--config "${CONFIG}")
               fi
 
               if [[ ! -f "${CONFIG}" ]] || ! grep -q "^SUSHY_EMULATOR_LISTEN_IP =" "${CONFIG}"; then
                   # Listen on all interfaces unless explicitly configured otherwise.
-                  ARGS="${ARGS} --interface ::"
+                  ARGS+=(--interface ::)
               fi
 
               # Activate virtual environment and start emulator
+              # shellcheck source=/dev/null
               source /opt/sushy-tools/venv/bin/activate
 
               # Execute sushy-emulator with debug enabled
-              exec /opt/sushy-tools/venv/bin/sushy-emulator --debug $ARGS
+              exec /opt/sushy-tools/venv/bin/sushy-emulator --debug "${ARGS[@]}"
             mode: "0755"
 
         - name: Create systemd service for Sushy Tools
@@ -646,61 +647,61 @@
 
               # Power control aliases (usage: redfish-power-on vm-name)
               redfish-power-on() {
-                redfish -X POST https://localhost:8000/redfish/v1/Systems/$1/Actions/ComputerSystem.Reset \
+                redfish -X POST https://localhost:8000/redfish/v1/Systems/"$1"/Actions/ComputerSystem.Reset \
                   -H "Content-Type: application/json" -d '{"ResetType": "On"}'
               }
 
               redfish-power-off() {
-                redfish -X POST https://localhost:8000/redfish/v1/Systems/$1/Actions/ComputerSystem.Reset \
+                redfish -X POST https://localhost:8000/redfish/v1/Systems/"$1"/Actions/ComputerSystem.Reset \
                   -H "Content-Type: application/json" -d '{"ResetType": "GracefulShutdown"}'
               }
 
               redfish-force-off() {
-                redfish -X POST https://localhost:8000/redfish/v1/Systems/$1/Actions/ComputerSystem.Reset \
+                redfish -X POST https://localhost:8000/redfish/v1/Systems/"$1"/Actions/ComputerSystem.Reset \
                   -H "Content-Type: application/json" -d '{"ResetType": "ForceOff"}'
               }
 
               redfish-reset() {
-                redfish -X POST https://localhost:8000/redfish/v1/Systems/$1/Actions/ComputerSystem.Reset \
+                redfish -X POST https://localhost:8000/redfish/v1/Systems/"$1"/Actions/ComputerSystem.Reset \
                   -H "Content-Type: application/json" -d '{"ResetType": "GracefulRestart"}'
               }
 
               # Boot device control aliases (usage: redfish-boot-cd vm-name)
               redfish-boot-cd() {
-                redfish -X PATCH https://localhost:8000/redfish/v1/Systems/$1 \
+                redfish -X PATCH https://localhost:8000/redfish/v1/Systems/"$1" \
                   -H "Content-Type: application/json" \
                   -d '{"Boot": {"BootSourceOverrideTarget": "Cd", "BootSourceOverrideEnabled": "Once"}}'
               }
 
               redfish-boot-hdd() {
-                redfish -X PATCH https://localhost:8000/redfish/v1/Systems/$1 \
+                redfish -X PATCH https://localhost:8000/redfish/v1/Systems/"$1" \
                   -H "Content-Type: application/json" \
                   -d '{"Boot": {"BootSourceOverrideTarget": "Hdd", "BootSourceOverrideEnabled": "Once"}}'
               }
 
               redfish-boot-pxe() {
-                redfish -X PATCH https://localhost:8000/redfish/v1/Systems/$1 \
+                redfish -X PATCH https://localhost:8000/redfish/v1/Systems/"$1" \
                   -H "Content-Type: application/json" \
                   -d '{"Boot": {"BootSourceOverrideTarget": "Pxe", "BootSourceOverrideEnabled": "Once"}}'
               }
 
               redfish-boot-disable() {
-                redfish -X PATCH https://localhost:8000/redfish/v1/Systems/$1 \
+                redfish -X PATCH https://localhost:8000/redfish/v1/Systems/"$1" \
                   -H "Content-Type: application/json" \
                   -d '{"Boot": {"BootSourceOverrideEnabled": "Disabled"}}'
               }
 
               # Status check aliases (usage: redfish-status vm-name)
               redfish-status() {
-                redfish https://localhost:8000/redfish/v1/Systems/$1 | jq '{PowerState: .PowerState, Boot: .Boot}'
+                redfish https://localhost:8000/redfish/v1/Systems/"$1" | jq '{PowerState: .PowerState, Boot: .Boot}'
               }
 
               redfish-boot-status() {
-                redfish https://localhost:8000/redfish/v1/Systems/$1 | jq '.Boot'
+                redfish https://localhost:8000/redfish/v1/Systems/"$1" | jq '.Boot'
               }
 
               redfish-power-status() {
-                redfish https://localhost:8000/redfish/v1/Systems/$1 | jq '.PowerState'
+                redfish https://localhost:8000/redfish/v1/Systems/"$1" | jq '.PowerState'
               }
 
         - name: Create Redfish commands helper file
