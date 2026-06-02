@@ -132,6 +132,9 @@
                 "dns": [
                   "172.17.0.1"
                 ],
+                "insecure-registries": [
+                  "127.0.0.1:4269"
+                ],
                 "builder": {
                   "gc": {
                     "enabled": true,
@@ -168,6 +171,9 @@
                 ],
                 "dns": [
                   "172.17.0.1"
+                ],
+                "insecure-registries": [
+                  "127.0.0.1:4269"
                 ],
                 "builder": {
                   "gc": {

@@ -217,7 +217,9 @@
                       "actions": ["read", "create", "update", "delete"]
                     }
                   },
-                  "compat": ["docker2s2"]
+                  "compat": ["docker2s2"],
+                  "readTimeout": "30m",
+                  "writeTimeout": "30m"
                 },
                 "extensions": {
                   "search": {

@@ -1,0 +1,118 @@
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
+# DEBUG: ansible-playbook dhcp-relay.yml -e "dhcp_server=172.17.1.201"
+#
+# Install s3rj1k/dhcp-relay as a systemd service forwarding DHCPv4 to
+# `dhcp_server`; binary pulled from ghcr.io/s3rj1k/dhcp-relay via crane.
+# Requires crane to be installed (see tools.yml).
+
+---
+- name: DHCPv4 relay (s3rj1k/dhcp-relay) on Debian/Ubuntu AMD64
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  ignore_errors: false
+  vars:
+    dhcp_server: ""                                   # REQUIRED: upstream DHCPv4 server IP
+    relay_extra_args: ""                              # extra relay flags, e.g. "-debug"
+    relay_image: "ghcr.io/s3rj1k/dhcp-relay:latest"
+    relay_image_bin: "/usr/local/bin/dhcp-relay"      # binary path inside the image
+    relay_platform: "linux/amd64"
+    relay_bin: "/usr/local/bin/dhcp-relay"
+    relay_tmp: "/tmp/dhcp-relay.extracted"
+    crane_bin: "/usr/local/bin/crane"
+
+  pre_tasks:
+    - name: Check requirements
+      block:
+        - name: Require dhcp_server
+          fail:
+            msg: "Set -e dhcp_server=<upstream DHCPv4 server IP>"
+          when: dhcp_server | trim | length == 0
+
+        - name: Check distribution is Debian or Ubuntu
+          fail:
+            msg: "This playbook only supports Debian or Ubuntu distributions"
+          when: ansible_distribution not in ["Debian", "Ubuntu"]
+
+        - name: Check architecture is AMD64
+          fail:
+            msg: "This playbook only supports AMD64 architecture"
+          when: ansible_architecture != "x86_64"
+
+        - name: Check crane is installed
+          stat:
+            path: "{{ crane_bin }}"
+          register: crane_stat
+
+        - name: Fail if crane is missing
+          fail:
+            msg: "crane not found at {{ crane_bin }}; run tools.yml first"
+          when: not crane_stat.stat.exists
+
+        - name: Show target
+          debug:
+            msg: "Relay -> {{ dhcp_server }} on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+
+  handlers:
+    - name: Restart dhcp-relay
+      systemd:
+        name: dhcp-relay
+        state: restarted
+        daemon_reload: yes
+      when: ansible_service_mgr == 'systemd'
+
+  tasks:
+    - name: Extract relay binary from the image
+      block:
+        - name: crane export -> untar {{ relay_image_bin }}
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              {{ crane_bin }} export --platform {{ relay_platform }} {{ relay_image }} - \
+                | tar -xO {{ relay_image_bin | regex_replace('^/', '') }} > {{ relay_tmp }}
+            executable: /bin/bash
+          changed_when: true
+
+        - name: Install relay binary to {{ relay_bin }}
+          copy:
+            src: "{{ relay_tmp }}"
+            dest: "{{ relay_bin }}"
+            mode: "0755"
+            remote_src: yes
+          notify: Restart dhcp-relay
+      always:
+        - name: Remove extracted temp
+          file:
+            path: "{{ relay_tmp }}"
+            state: absent
+
+    - name: Configure service
+      block:
+        - name: Install systemd unit
+          copy:
+            dest: /etc/systemd/system/dhcp-relay.service
+            mode: "0644"
+            content: |
+              [Unit]
+              Description=DHCPv4 relay -> {{ dhcp_server }}
+              After=network-online.target
+              Wants=network-online.target
+
+              [Service]
+              ExecStart={{ relay_bin }} -dhcp-server-address {{ dhcp_server }} -log-no-datetime {{ relay_extra_args }}
+              Restart=on-failure
+              RestartSec=2
+
+              [Install]
+              WantedBy=multi-user.target
+          notify: Restart dhcp-relay
+
+        - name: Enable + start dhcp-relay
+          systemd:
+            name: dhcp-relay
+            enabled: yes
+            state: started
+            daemon_reload: yes

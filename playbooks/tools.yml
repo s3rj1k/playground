@@ -449,6 +449,30 @@
             - /tmp/oras.tar.gz
             - /tmp/oras-extract
 
+    - name: Install crane
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/google/go-containerregistry/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/google/go-containerregistry/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download and install crane binary ({{ version }})
+          ansible.builtin.unarchive:
+            src: "https://github.com/google/go-containerregistry/releases/download/{{ version }}/go-containerregistry_Linux_x86_64.tar.gz"
+            dest: /usr/local/bin
+            remote_src: yes
+            include:
+              - crane
+            mode: "0755"
+          when: version | trim | length > 0
+
     - name: Install yq
       block:
         - name: Get latest version
