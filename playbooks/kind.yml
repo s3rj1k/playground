@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: MIT
 
 # DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/kind.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "registry_mirror=https://registry.example.com:5000" playbooks/kind.yml
 
 ---
+- name: Import Docker configuration playbook
+  import_playbook: docker.yml
+
 - name: Kind on Debian/Ubuntu AMD64
   hosts: localhost
   connection: local
@@ -36,21 +40,6 @@
         timeout: 600
       when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
 
-  handlers:
-    - name: Restart Docker
-      systemd:
-        name: docker
-        state: restarted
-        daemon_reload: yes
-      when: ansible_service_mgr == 'systemd'
-
-    - name: Restart systemd-resolved
-      systemd:
-        name: systemd-resolved
-        state: restarted
-        daemon_reload: yes
-      when: ansible_service_mgr == 'systemd'
-
   tasks:
     - name: Update and upgrade system packages
       apt:
@@ -58,58 +47,23 @@
         upgrade: yes
       register: system_upgraded
 
-    - name: Consolidated package management
-      block:
-        - name: Create directory for apt keyrings
-          ansible.builtin.file:
-            path: /etc/apt/keyrings
-            state: directory
-            mode: "0755"
-
-        # Note: `ansible.builtin.deb822_repository` requires Ansible 2.15+
-
-        - name: Download Docker signing key
-          ansible.builtin.get_url:
-            url: "https://download.docker.com/linux/ubuntu/gpg"
-            dest: "/etc/apt/keyrings/docker.asc"
-            mode: "0644"
-
-        - name: Create Docker repository file
-          ansible.builtin.copy:
-            dest: "/etc/apt/sources.list.d/docker.sources"
-            content: |
-              X-Repolib-Name: docker
-              Types: deb
-              URIs: https://download.docker.com/linux/{{ ansible_distribution | lower }}
-              Signed-By: /etc/apt/keyrings/docker.asc
-              Suites: {{ ansible_distribution_release | lower }}
-              Architectures: amd64
-              Components: stable
-              Enabled: yes
-            mode: "0644"
-
-        - name: Install all required packages
-          apt:
-            name:
-              # Base dependencies
-              - apt-transport-https
-              - ca-certificates
-              - curl
-              - gnupg
-              # Networking
-              - ebtables
-              - ethtool
-              - iproute2
-              - socat
-              # Docker and dependencies
-              - containerd.io
-              - docker-buildx-plugin
-              - docker-ce
-              - docker-ce-cli
-              - docker-compose-plugin
-            state: present
-            update_cache: yes
-          when: system_upgraded is success
+    - name: Install all required packages
+      apt:
+        name:
+          # Base dependencies
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - jq
+          # Networking
+          - ebtables
+          - ethtool
+          - iproute2
+          - socat
+        state: present
+        update_cache: yes
+      when: system_upgraded is success
 
     - name: Install Kind
       block:
@@ -170,123 +124,6 @@
         - name: Apply kernel parameters
           command: sysctl --system
           changed_when: false
-
-    - name: Configure Docker
-      block:
-        - name: Create Docker daemon configuration directory
-          file:
-            path: /etc/docker
-            state: directory
-            mode: "0755"
-
-        - name: Ensure directory for systemd-resolved config exists
-          file:
-            path: /etc/systemd/resolved.conf.d/
-            state: directory
-            mode: "0755"
-
-        - name: Set Docker daemon configuration
-          copy:
-            dest: /etc/docker/daemon.json
-            mode: "0644"
-            content: |
-              {
-                "default-address-pools": [
-                  {
-                    "base": "172.17.0.0/16",
-                    "size": 24
-                  }
-                ],
-                "dns": [
-                  "172.17.0.1"
-                ],
-                "builder": {
-                  "gc": {
-                    "enabled": true,
-                    "defaultKeepStorage": "10GB",
-                    "policy": [
-                      {
-                        "keepStorage": "10GB",
-                        "filter": [
-                          "unused-for=42h"
-                        ]
-                      },
-                      {
-                        "keepStorage": "50GB",
-                        "all": true
-                      }
-                    ]
-                  }
-                }
-              }
-          when: registry_mirror is not defined or registry_mirror | trim | length == 0
-          notify: Restart Docker
-
-        - name: Set Docker daemon configuration
-          copy:
-            dest: /etc/docker/daemon.json
-            mode: "0644"
-            content: |
-              {
-                "default-address-pools": [
-                  {
-                    "base": "172.17.0.0/16",
-                    "size": 24
-                  }
-                ],
-                "dns": [
-                  "172.17.0.1"
-                ],
-                "builder": {
-                  "gc": {
-                    "enabled": true,
-                    "defaultKeepStorage": "10GB",
-                    "policy": [
-                      {
-                        "keepStorage": "10GB",
-                        "filter": [
-                          "unused-for=42h"
-                        ]
-                      },
-                      {
-                        "keepStorage": "50GB",
-                        "all": true
-                      }
-                    ]
-                  }
-                },
-                "registry-mirrors": [
-                  "https://{{ registry_mirror | regex_replace('^https?://', '') }}"
-                ]
-              }
-          when: registry_mirror is defined and registry_mirror | trim | length > 0
-          notify: Restart Docker
-
-        - name: Enable Docker service
-          service:
-            name: docker
-            enabled: yes
-            state: started
-
-        - name: Configure systemd-resolved global settings
-          copy:
-            dest: /etc/systemd/resolved.conf.d/global.conf
-            content: |
-              [Resolve]
-              DNSStubListenerExtra=172.17.0.1
-
-              MulticastDNS=no
-              LLMNR=no
-
-              ReadEtcHosts=yes
-            mode: "0644"
-          notify: Restart systemd-resolved
-
-        - name: Enable systemd-resolved service
-          service:
-            name: systemd-resolved
-            enabled: yes
-            state: started
 
     - name: Configure Kind
       block:
@@ -377,7 +214,7 @@
                 sleep 5
               done
 
-              NET_IP=$(echo ${GW_IP} | sed -E 's|^([0-9]+\.[0-9]+)\..*$|\1|g')
+              NET_IP=$(echo "${GW_IP}" | sed -E 's|^([0-9]+\.[0-9]+)\..*$|\1|g')
 
               until cat <<EOF | sed -E "s|172.19|${NET_IP}|g" | kubectl apply -f -
               apiVersion: metallb.io/v1beta1

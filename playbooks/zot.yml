@@ -77,7 +77,7 @@
 
         - name: Create Zot storage directory
           file:
-            path: /var/run/zot
+            path: /var/lib/zot
             state: directory
             mode: "0755"
             owner: root
@@ -181,24 +181,26 @@
             owner: root
             group: root
 
-        - name: Configure Zot with TLS
+        - name: Configure Zot
           copy:
             dest: /etc/zot/config.json
             content: |
               {
                 "distSpecVersion": "1.1.1",
                 "storage": {
-                  "rootDirectory": "/var/run/zot",
+                  "rootDirectory": "/var/lib/zot",
                   "gc": true,
                   "dedupe": true
                 },
                 "http": {
                   "address": "{{ ZOT_LISTEN_ADDRESS }}",
                   "port": "{{ ZOT_PORT }}",
+              {% if ZOT_TLS_ENABLED | bool %}
                   "tls": {
                     "cert": "/etc/zot/certs/zot.crt",
                     "key": "/etc/zot/certs/zot.key"
                   },
+              {% endif %}
                   "auth": {
                     "htpasswd": {
                       "path": "/etc/zot/htpasswd"
@@ -209,8 +211,13 @@
                       "**": {
                         "anonymousPolicy": ["read"]
                       }
+                    },
+                    "adminPolicy": {
+                      "users": ["admin"],
+                      "actions": ["read", "create", "update", "delete"]
                     }
-                  }
+                  },
+                  "compat": ["docker2s2"]
                 },
                 "extensions": {
                   "search": {
@@ -235,59 +242,6 @@
             owner: root
             group: root
           notify: Restart zot
-          when: ZOT_TLS_ENABLED | bool
-
-        - name: Configure Zot without TLS
-          copy:
-            dest: /etc/zot/config.json
-            content: |
-              {
-                "distSpecVersion": "1.1.1",
-                "storage": {
-                  "rootDirectory": "/var/run/zot",
-                  "gc": true,
-                  "dedupe": true
-                },
-                "http": {
-                  "address": "{{ ZOT_LISTEN_ADDRESS }}",
-                  "port": "{{ ZOT_PORT }}",
-                  "auth": {
-                    "htpasswd": {
-                      "path": "/etc/zot/htpasswd"
-                    }
-                  },
-                  "accessControl": {
-                    "repositories": {
-                      "**": {
-                        "anonymousPolicy": ["read"]
-                      }
-                    }
-                  }
-                },
-                "extensions": {
-                  "search": {
-                    "enable": true,
-                    "cve": {
-                      "updateInterval": "24h"
-                    }
-                  },
-                  "scrub": {
-                    "enable": true,
-                    "interval": "72h"
-                  },
-                  "ui": {
-                    "enable": true
-                  }
-                },
-                "log": {
-                  "level": "info"
-                }
-              }
-            mode: "0644"
-            owner: root
-            group: root
-          notify: Restart zot
-          when: not (ZOT_TLS_ENABLED | bool)
 
         - name: Enable Zot service
           systemd:

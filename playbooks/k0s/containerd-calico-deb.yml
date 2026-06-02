@@ -1,0 +1,279 @@
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/k0s/containerd-calico-deb.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "API_ADDRESS=172.17.1.10" playbooks/k0s/containerd-calico-deb.yml
+#
+# Single-node k0s (containerd + stock-Calico variant of k0s-deb.yml): embedded
+# containerd CRI, stock Calico CNI, controller also runs workloads.
+
+---
+- name: Kubernetes (k0s, containerd + Calico) on Debian/Ubuntu AMD64
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  ignore_errors: false
+  vars:
+    K0S_MAJOR_MINOR_VERSION: "1.35"
+    API_ADDRESS: ""           # api.address + etcd.peerAddress; empty => host primary IP
+    K0S_API_PORT: 9643        # off default 9443 so BMO's :9443 webhook can bind
+    API_SANS: "169.254.1.42"  # extra API cert SANs, comma-separated; empty to skip
+
+  pre_tasks:
+    - name: Check if system is supported
+      block:
+        - name: Check if distribution is Debian or Ubuntu
+          fail:
+            msg: "This playbook only supports Debian or Ubuntu distributions"
+          when: ansible_distribution not in ["Debian", "Ubuntu"]
+
+        - name: Check if architecture is AMD64
+          fail:
+            msg: "This playbook only supports AMD64 architecture"
+          when: ansible_architecture != "x86_64"
+
+        - name: Get OS version
+          debug:
+            msg: "Running on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+
+    - name: Resolve k0s API / etcd bind address
+      set_fact:
+        k0s_api_address: "{{ API_ADDRESS | trim if (API_ADDRESS | trim | length > 0) else (ansible_default_ipv4.address | default('')) }}"
+
+    - name: Ensure an API address was resolved
+      fail:
+        msg: "Could not auto-detect the API address; pass it explicitly with -e API_ADDRESS=<ip>"
+      when: k0s_api_address | length == 0
+
+    - name: Wait for system to be ready
+      wait_for:
+        path: /var/lib/cloud/instance/boot-finished
+        timeout: 600
+      when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
+
+  handlers:
+    - name: Restart k0scontroller
+      systemd:
+        name: k0scontroller.service
+        state: restarted
+        daemon_reload: yes
+
+  tasks:
+    - name: Update and upgrade system packages
+      apt:
+        update_cache: yes
+        upgrade: yes
+      register: system_upgraded
+
+    - name: Install required packages
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - jq
+        state: present
+        update_cache: yes
+      when: system_upgraded is success
+
+    - name: Configure k0s embedded containerd
+      # containerd.d/*.toml drop-ins merge into k0s's containerd config on first
+      # start; registry certs.d/hosts.toml live under config_path.
+      # https://docs.k0sproject.io/head/runtime/
+      vars:
+        local_registry: "{{ k0s_api_address }}:4269"  # local self-signed registry
+      block:
+        - name: Create k0s containerd drop-in directory
+          file:
+            path: /etc/k0s/containerd.d
+            state: directory
+            mode: "0755"
+
+        - name: Point k0s containerd CRI at the certs.d hosts directory
+          copy:
+            dest: /etc/k0s/containerd.d/00-registry.toml
+            content: |
+              [plugins."io.containerd.grpc.v1.cri".registry]
+                config_path = "/etc/k0s/containerd-certs.d"
+            mode: "0644"
+
+        - name: Discard unpacked layer blobs to halve per-image disk cost
+          copy:
+            dest: /etc/k0s/containerd.d/10-discard-unpacked-layers.toml
+            content: |
+              # Drop compressed blobs after unpack (~half the disk); re-pull if GC'd.
+              [plugins."io.containerd.grpc.v1.cri".containerd]
+                discard_unpacked_layers = true
+            mode: "0644"
+
+        - name: Create certs.d directory for the local registry
+          file:
+            path: "/etc/k0s/containerd-certs.d/{{ local_registry }}"
+            state: directory
+            mode: "0755"
+
+        - name: Trust the local self-signed registry ({{ local_registry }})
+          copy:
+            dest: "/etc/k0s/containerd-certs.d/{{ local_registry }}/hosts.toml"
+            content: |
+              server = "https://{{ local_registry }}"
+
+              [host."https://{{ local_registry }}"]
+                capabilities = ["pull", "resolve"]
+                skip_verify = true
+            mode: "0644"
+
+    - name: Install k0s
+      block:
+        - name: Get latest k0s {{ K0S_MAJOR_MINOR_VERSION }} version
+          shell: |
+            curl -s "https://api.github.com/repos/k0sproject/k0s/releases" | \
+            jq -r '.[] | select(.tag_name | test("^v{{ K0S_MAJOR_MINOR_VERSION | replace(".", "\\.") }}\\.[0-9]+\\+k0s\\.[0-9]+$")) | .tag_name' | \
+            head -1
+          register: k0s_version_result
+          changed_when: false
+
+        - name: Set k0s version
+          set_fact:
+            k0s_version: "{{ k0s_version_result.stdout }}"
+          when: k0s_version_result.stdout | length > 0
+
+        - name: Download k0s binary ({{ k0s_version | default('version not found') }})
+          get_url:
+            url: "https://github.com/k0sproject/k0s/releases/download/{{ k0s_version }}/k0s-{{ k0s_version }}-amd64"
+            dest: /usr/local/bin/k0s
+            mode: "0755"
+          when: k0s_version is defined
+
+        - name: Create k0s configuration directory
+          file:
+            path: /etc/k0s
+            state: directory
+            mode: "0755"
+
+        - name: Create k0s configuration file
+          blockinfile:
+            path: /etc/k0s/k0s.yaml
+            create: yes
+            block: |
+              # Recreate manually:
+              # k0s stop ; k0s reset --kubelet-root-dir=/var/lib/kubelet --debug
+              # k0s install controller --enable-dynamic-config --disable-components=konnectivity-server --enable-worker --no-taints --profile numa --config /etc/k0s/k0s.yaml --kubelet-root-dir=/var/lib/kubelet --debug
+              # k0s start ; systemctl status k0scontroller
+              # k0s kubeconfig admin | base64 -w 0
+
+              apiVersion: k0s.k0sproject.io/v1beta1
+              kind: ClusterConfig
+              metadata:
+                name: k0s
+                namespace: kube-system
+              spec:
+                api:
+                  # k0sApiPort off 9443 so BMO's hostNetwork :9443 webhook can bind
+                  address: {{ k0s_api_address }}
+                  k0sApiPort: {{ K0S_API_PORT }}
+              {% if API_SANS is defined and API_SANS | trim | length > 0 %}
+                  sans:
+              {% for san in API_SANS.split(',') %}
+                    - {{ san | trim }}
+              {% endfor %}
+              {% endif %}
+                telemetry:
+                  enabled: false
+                storage:
+                  type: etcd
+                  etcd:
+                    peerAddress: {{ k0s_api_address }}
+                network:
+                  provider: calico
+                  dualStack:
+                    enabled: false
+                  calico:
+                    mode: vxlan
+                    mtu: 1400
+                    overlay: Always
+                    ipAutodetectionMethod: can-reach=8.8.8.8
+                    envVars:
+                      FELIX_IGNORELOOSERPF: "true"
+                      FELIX_ALLOWVXLANPACKETSFROMWORKLOADS: "true"
+                featureGates:
+                  - name: ImageVolume
+                    enabled: true
+                workerProfiles:
+                  - name: numa
+                    values:
+                      topologyManagerPolicy: "best-effort"
+                      cpuManagerPolicy: "static"
+                      cpuManagerPolicyOptions:
+                        full-pcpus-only: "true"
+                        distribute-cpus-across-numa: "true"
+                      reservedSystemCPUs: "0"
+                      # image GC: aggressive (vs 85/80/2m) to not hoard local-build layers
+                      imageGCHighThresholdPercent: 60
+                      imageGCLowThresholdPercent: 50
+                      imageMinimumGCAge: 1m
+                      # eviction: absolute thresholds (defaults' 10/15% = ~25-38 GB here, too lax)
+                      evictionHard:
+                        memory.available: "500Mi"
+                        nodefs.available: "5Gi"
+                        imagefs.available: "5Gi"
+                      evictionMinimumReclaim:
+                        memory.available: "0Mi"
+                        nodefs.available: "1Gi"
+                        imagefs.available: "2Gi"
+                      reservedMemory:
+                        - limits:
+                            memory: 2Gi
+                          numaNode: 0
+                      kubeReservedCgroup: ""
+            marker: ""
+            mode: "0644"
+
+        - name: Create systemd override directory for k0scontroller
+          file:
+            path: /etc/systemd/system/k0scontroller.service.d
+            state: directory
+            mode: "0755"
+
+        - name: Configure k0scontroller service override
+          copy:
+            dest: /etc/systemd/system/k0scontroller.service.d/override.conf
+            content: |
+              [Service]
+              LimitNOFILE=1048576
+              OOMScoreAdjust=-999
+            mode: "0644"
+          notify: Restart k0scontroller
+
+        - name: Install k0s as a Controller
+          shell: |
+            if [ ! -f /etc/systemd/system/k0scontroller.service ]; then
+              k0s install controller -c /etc/k0s/k0s.yaml --enable-dynamic-config --disable-components=konnectivity-server --enable-worker --no-taints --profile numa --kubelet-root-dir=/var/lib/kubelet --verbose
+            fi
+          args:
+            executable: /bin/bash
+
+        - name: Start k0s Controller service
+          systemd:
+            name: k0scontroller.service
+            state: started
+            enabled: yes
+
+    - name: Wait for k0s control plane and stock Calico CNI
+      # Node Ready implies Calico (auto-deployed by k0s) has rolled out.
+      block:
+        - name: Wait for k0s admin kubeconfig to be generated
+          wait_for:
+            path: /var/lib/k0s/pki/admin.conf
+            timeout: 300
+
+        - name: Wait for k0s cluster nodes to be Ready
+          shell: |
+            export KUBECONFIG=/var/lib/k0s/pki/admin.conf
+            k0s kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          args:
+            executable: /bin/bash
+          register: cluster_ready
+          until: cluster_ready.rc == 0
+          retries: 30
+          delay: 30

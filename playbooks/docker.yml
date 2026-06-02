@@ -1,0 +1,230 @@
+# Copyright 2025 s3rj1k
+# SPDX-License-Identifier: MIT
+
+# DEBUG: ansible-pull -U https://github.com/s3rj1k/playground.git playbooks/docker.yml
+#        ansible-pull -U https://github.com/s3rj1k/playground.git -e "registry_mirror=https://registry.example.com:5000" playbooks/docker.yml
+
+---
+- name: Docker on Debian/Ubuntu AMD64
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  ignore_errors: false
+  vars:
+    registry_mirror: ""
+    # User to add to the `docker` group so Docker can be used without root.
+    # Defaults to the user that invoked sudo, falling back to the current user.
+    docker_user: "{{ lookup('env', 'SUDO_USER') | default(ansible_user_id, true) }}"
+
+  pre_tasks:
+    - name: Check if system is supported
+      block:
+        - name: Check if distribution is Debian or Ubuntu
+          fail:
+            msg: "This playbook only supports Debian or Ubuntu distributions"
+          when: ansible_distribution not in ["Debian", "Ubuntu"]
+
+        - name: Check if architecture is AMD64
+          fail:
+            msg: "This playbook only supports AMD64 architecture"
+          when: ansible_architecture != "x86_64"
+
+        - name: Get OS version
+          debug:
+            msg: "Running on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+
+    - name: Wait for system to be ready
+      wait_for:
+        path: /var/lib/cloud/instance/boot-finished
+        timeout: 600
+      when: ansible_service_mgr is defined and lookup('env', 'CLOUD_INIT') != ''
+
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+        daemon_reload: yes
+      when: ansible_service_mgr == 'systemd'
+
+    - name: Restart systemd-resolved
+      systemd:
+        name: systemd-resolved
+        state: restarted
+        daemon_reload: yes
+      when: ansible_service_mgr == 'systemd'
+
+  tasks:
+    - name: Install Docker
+      block:
+        - name: Create directory for apt keyrings
+          ansible.builtin.file:
+            path: /etc/apt/keyrings
+            state: directory
+            mode: "0755"
+
+        # Note: `ansible.builtin.deb822_repository` requires Ansible 2.15+
+
+        - name: Download Docker signing key
+          ansible.builtin.get_url:
+            url: "https://download.docker.com/linux/ubuntu/gpg"
+            dest: "/etc/apt/keyrings/docker.asc"
+            mode: "0644"
+
+        - name: Create Docker repository file
+          ansible.builtin.copy:
+            dest: "/etc/apt/sources.list.d/docker.sources"
+            content: |
+              X-Repolib-Name: docker
+              Types: deb
+              URIs: https://download.docker.com/linux/{{ ansible_distribution | lower }}
+              Signed-By: /etc/apt/keyrings/docker.asc
+              Suites: {{ ansible_distribution_release | lower }}
+              Architectures: amd64
+              Components: stable
+              Enabled: yes
+            mode: "0644"
+
+        - name: Install Docker packages
+          apt:
+            name:
+              # Base dependencies
+              - apt-transport-https
+              - ca-certificates
+              - curl
+              - gnupg
+              # Docker and dependencies
+              - containerd.io
+              - docker-buildx-plugin
+              - docker-ce
+              - docker-ce-cli
+              - docker-compose-plugin
+            state: present
+            update_cache: yes
+
+    - name: Configure Docker
+      block:
+        - name: Create Docker daemon configuration directory
+          file:
+            path: /etc/docker
+            state: directory
+            mode: "0755"
+
+        - name: Ensure directory for systemd-resolved config exists
+          file:
+            path: /etc/systemd/resolved.conf.d/
+            state: directory
+            mode: "0755"
+
+        - name: Set Docker daemon configuration
+          copy:
+            dest: /etc/docker/daemon.json
+            mode: "0644"
+            content: |
+              {
+                "default-address-pools": [
+                  {
+                    "base": "172.17.0.0/16",
+                    "size": 24
+                  }
+                ],
+                "dns": [
+                  "172.17.0.1"
+                ],
+                "builder": {
+                  "gc": {
+                    "enabled": true,
+                    "defaultKeepStorage": "10GB",
+                    "policy": [
+                      {
+                        "keepStorage": "10GB",
+                        "filter": [
+                          "unused-for=42h"
+                        ]
+                      },
+                      {
+                        "keepStorage": "50GB",
+                        "all": true
+                      }
+                    ]
+                  }
+                }
+              }
+          when: registry_mirror is not defined or registry_mirror | trim | length == 0
+          notify: Restart Docker
+
+        - name: Set Docker daemon configuration
+          copy:
+            dest: /etc/docker/daemon.json
+            mode: "0644"
+            content: |
+              {
+                "default-address-pools": [
+                  {
+                    "base": "172.17.0.0/16",
+                    "size": 24
+                  }
+                ],
+                "dns": [
+                  "172.17.0.1"
+                ],
+                "builder": {
+                  "gc": {
+                    "enabled": true,
+                    "defaultKeepStorage": "10GB",
+                    "policy": [
+                      {
+                        "keepStorage": "10GB",
+                        "filter": [
+                          "unused-for=42h"
+                        ]
+                      },
+                      {
+                        "keepStorage": "50GB",
+                        "all": true
+                      }
+                    ]
+                  }
+                },
+                "registry-mirrors": [
+                  "https://{{ registry_mirror | regex_replace('^https?://', '') }}"
+                ]
+              }
+          when: registry_mirror is defined and registry_mirror | trim | length > 0
+          notify: Restart Docker
+
+        - name: Enable Docker service
+          service:
+            name: docker
+            enabled: yes
+            state: started
+
+        - name: Manage Docker as a non-root user
+          user:
+            name: "{{ docker_user }}"
+            groups: docker
+            append: yes
+          when:
+            - docker_user | trim | length > 0
+            - docker_user != "root"
+
+        - name: Configure systemd-resolved global settings
+          copy:
+            dest: /etc/systemd/resolved.conf.d/global.conf
+            content: |
+              [Resolve]
+              DNSStubListenerExtra=172.17.0.1
+
+              MulticastDNS=no
+              LLMNR=no
+
+              ReadEtcHosts=yes
+            mode: "0644"
+          notify: Restart systemd-resolved
+
+        - name: Enable systemd-resolved service
+          service:
+            name: systemd-resolved
+            enabled: yes
+            state: started
