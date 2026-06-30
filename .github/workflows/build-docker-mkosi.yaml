@@ -1,11 +1,11 @@
-name: Kubernetes Image Builder (mkosi)
+name: Docker Image Builder (mkosi)
 
 on:
   push:
     branches:
       - main
     paths:
-      - ".github/workflows/build-k8s-mkosi.yaml"
+      - ".github/workflows/build-docker-mkosi.yaml"
       - "vms/efi/mkosi/debian/**"
   workflow_dispatch:
 
@@ -63,7 +63,7 @@ jobs:
         shell: bash
         working-directory: vms/efi/mkosi/debian
         run: |
-          sudo mkosi --force --profile k8s --architecture=${{ matrix.mkosi_arch }} \
+          sudo mkosi --force --profile docker --architecture=${{ matrix.mkosi_arch }} \
             --tools-tree=default \
             --tools-tree-distribution=debian \
             --tools-tree-release=trixie \
@@ -72,7 +72,7 @@ jobs:
 
           gzip --keep disk.vm.raw
 
-          echo "ARTIFACT_TAG=$(cat kubelet.version | tr -d '\n')" >> $GITHUB_ENV
+          echo "ARTIFACT_TAG=${{ github.run_id }}" >> $GITHUB_ENV
 
       - name: Log in to Container Registry
         uses: docker/login-action@v4
@@ -91,16 +91,16 @@ jobs:
           export TIMESTAMP="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
           mkdir -p image-builder/images/capi/output/ && \
-            mv -v disk.vm.raw.gz image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-kube-${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz
+            mv -v disk.vm.raw.gz image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-docker-${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz
 
-          oras push ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}-k8s:${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz \
+          oras push ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}-docker:${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz \
             --annotation "org.opencontainers.image.authors=${{ github.actor }}" \
             --annotation "org.opencontainers.image.created=${TIMESTAMP}" \
-            --annotation "org.opencontainers.image.title=${{ env.MKOSI_IMAGE }}-k8s" \
+            --annotation "org.opencontainers.image.title=${{ env.MKOSI_IMAGE }}-docker" \
             --annotation "org.opencontainers.image.version=${{ env.ARTIFACT_TAG }}" \
             --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
             --annotation "org.opencontainers.image.base.digest=${DIGEST}" \
-            --artifact-type application/vnd.acme.rocket.config image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-kube-${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz
+            --artifact-type application/vnd.acme.rocket.config image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-docker-${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz
 
       - name: Write summary
         shell: bash
@@ -108,17 +108,5 @@ jobs:
         run: |
           echo "## Image pull using ORAS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "oras pull ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}-k8s:${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## CAPI preflight (required before kubeadm)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Pass \`ignorePreflightErrors\` in both \`initConfiguration\` and \`joinConfiguration\` to bypass Debian-specific preflight failures:" >> $GITHUB_STEP_SUMMARY
-          echo '```yaml' >> $GITHUB_STEP_SUMMARY
-          echo "nodeRegistration:" >> $GITHUB_STEP_SUMMARY
-          echo "  criSocket: unix:///run/containerd/containerd.sock" >> $GITHUB_STEP_SUMMARY
-          echo "ignorePreflightErrors:" >> $GITHUB_STEP_SUMMARY
-          echo "  - SystemVerification" >> $GITHUB_STEP_SUMMARY
-          echo "  - FileContent--proc-sys-net-bridge-bridge-nf-call-iptables" >> $GITHUB_STEP_SUMMARY
-          echo "  - FileContent--proc-sys-net-bridge-bridge-nf-call-ip6tables" >> $GITHUB_STEP_SUMMARY
+          echo "oras pull ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}-docker:${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

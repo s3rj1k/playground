@@ -1,6 +1,0 @@
-#!/bin/bash
-
-set -x
-
-# Start `systemd-networkd`
-systemctl enable --now systemd-networkd.service

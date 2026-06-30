@@ -1,0 +1,7 @@
+#!/bin/bash
+
+set -x
+
+# Enable container runtime services
+systemctl enable containerd.service
+systemctl enable docker.service

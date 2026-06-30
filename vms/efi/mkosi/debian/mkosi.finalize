@@ -1,0 +1,11 @@
+#!/bin/bash
+
+set -x
+
+# Disable root password (PAM is not functional in finalize chroot)
+chroot "$BUILDROOT" usermod -p '*' root
+
+# Export Kubelet version as a build artifact if present
+if [ -f "$BUILDROOT/kubelet.version" ]; then
+	cp -av "$BUILDROOT/kubelet.version" "$OUTPUTDIR/"
+fi
