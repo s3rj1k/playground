@@ -494,6 +494,65 @@
             mode: "0755"
           when: version | trim | length > 0
 
+    - name: Install task
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/go-task/task/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/go-task/task/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download archive
+          get_url:
+            url: "https://github.com/go-task/task/releases/download/{{ version }}/task_linux_amd64.tar.gz"
+            dest: /tmp/task.tar.gz
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Create temporary extraction directory
+          file:
+            path: /tmp/task-extract
+            state: directory
+            mode: "0755"
+          when: version | trim | length > 0
+
+        - name: Extract binary
+          unarchive:
+            src: /tmp/task.tar.gz
+            dest: /tmp/task-extract
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Install task binary ({{ version }})
+          copy:
+            src: /tmp/task-extract/task
+            dest: /usr/local/bin/task
+            mode: "0755"
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Add completion to bashrc if not present
+          lineinfile:
+            path: ~/.bashrc
+            line: 'eval "$(task --completion bash)"'
+            state: present
+            create: yes
+          when: version | trim | length > 0
+
+        - name: Cleanup temporary files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/task.tar.gz
+            - /tmp/task-extract
+
     - name: Install envsubst
       block:
         - name: Get latest version
@@ -529,3 +588,54 @@
           file:
             path: /tmp/envsubst
             state: absent
+
+    - name: Install helmfile
+      block:
+        - name: Get latest version
+          uri:
+            url: "https://api.github.com/repos/helmfile/helmfile/releases/latest"
+            return_content: yes
+          register: release_info
+
+        - name: Set version
+          set_fact:
+            # curl -s "https://api.github.com/repos/helmfile/helmfile/releases/latest" | jq -r ".tag_name"
+            version: "{{ release_info.json.tag_name }}"
+          when: release_info is defined and release_info.status == 200
+
+        - name: Download archive
+          get_url:
+            url: "https://github.com/helmfile/helmfile/releases/download/{{ version }}/helmfile_{{ version | replace('v', '') }}_linux_amd64.tar.gz"
+            dest: /tmp/helmfile.tar.gz
+            mode: "0644"
+          when: version | trim | length > 0
+
+        - name: Create temporary extraction directory
+          file:
+            path: /tmp/helmfile-extract
+            state: directory
+            mode: "0755"
+          when: version | trim | length > 0
+
+        - name: Extract binary
+          unarchive:
+            src: /tmp/helmfile.tar.gz
+            dest: /tmp/helmfile-extract
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Install helmfile binary ({{ version }})
+          copy:
+            src: /tmp/helmfile-extract/helmfile
+            dest: /usr/local/bin/helmfile
+            mode: "0755"
+            remote_src: yes
+          when: version | trim | length > 0
+
+        - name: Cleanup temporary files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/helmfile.tar.gz
+            - /tmp/helmfile-extract

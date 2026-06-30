@@ -6,16 +6,25 @@ on:
       - main
     paths:
       - ".github/workflows/build-k8s-mkosi.yaml"
-      - "vms/efi/mkosi/ubuntu/x86_64-k8s/**"
+      - "vms/efi/mkosi/debian/**"
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  MKOSI_IMAGE: ubuntu-2404
+  MKOSI_IMAGE: debian-trixie
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            mkosi_arch: x86-64
+            runner: ubuntu-24.04
+          - arch: arm64
+            mkosi_arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
 
     permissions:
       contents: read
@@ -23,10 +32,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup ORAS
-        uses: oras-project/setup-oras@v1
+        uses: oras-project/setup-oras@v2
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -41,23 +50,28 @@ jobs:
           sudo pip install git+https://github.com/systemd/mkosi.git
           mkosi --version
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            debian-archive-keyring \
-            mtools \
-            python3-pefile \
-            systemd-boot
+      # Optional: install host-side build dependencies instead of using --tools-tree below.
+      # - name: Install dependencies
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y \
+      #       debian-archive-keyring \
+      #       mtools \
+      #       python3-pefile \
+      #       systemd-boot
 
       - name: Build OS Image
         shell: bash
-        working-directory: vms/efi/mkosi/ubuntu/x86_64-k8s
+        working-directory: vms/efi/mkosi/debian
         run: |
-          sudo mkosi --force --output=${{ env.MKOSI_IMAGE }} build
-          sudo chmod 0666 ${{ env.MKOSI_IMAGE }}.raw
+          sudo mkosi --force --profile k8s --architecture=${{ matrix.mkosi_arch }} \
+            --tools-tree=default \
+            --tools-tree-distribution=debian \
+            --tools-tree-release=trixie \
+            build
+          sudo chmod 0666 disk.vm.raw
 
-          gzip --keep ${{ env.MKOSI_IMAGE }}.raw
+          gzip --keep disk.vm.raw
 
           echo "ARTIFACT_TAG=$(cat kubelet.version | tr -d '\n')" >> $GITHUB_ENV
 
@@ -70,30 +84,39 @@ jobs:
 
       - name: Push image to registry
         shell: bash
-        working-directory: vms/efi/mkosi/ubuntu/x86_64-k8s
+        working-directory: vms/efi/mkosi/debian
         run: |
           oras version
 
-          export DIGEST="$(sha256sum ${{ env.MKOSI_IMAGE }}.raw.gz | awk '{print $1}')"
+          export DIGEST="$(sha256sum disk.vm.raw.gz | awk '{print $1}')"
           export TIMESTAMP="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
           mkdir -p image-builder/images/capi/output/ && \
-            mv -v ${{ env.MKOSI_IMAGE }}.raw.gz image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-kube-${{ env.ARTIFACT_TAG }}.gz
+            mv -v disk.vm.raw.gz image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-kube-${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz
 
-          oras push ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}:${{ env.ARTIFACT_TAG }}.gz \
+          oras push ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}:${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz \
             --annotation "org.opencontainers.image.authors=${{ github.actor }}" \
             --annotation "org.opencontainers.image.created=${TIMESTAMP}" \
             --annotation "org.opencontainers.image.title=${{ env.MKOSI_IMAGE }}-kube" \
             --annotation "org.opencontainers.image.version=${{ env.ARTIFACT_TAG }}" \
             --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
             --annotation "org.opencontainers.image.base.digest=${DIGEST}" \
-            --artifact-type application/vnd.acme.rocket.config image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-kube-${{ env.ARTIFACT_TAG }}.gz
+            --artifact-type application/vnd.acme.rocket.config image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-kube-${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz
 
       - name: Write summary
         shell: bash
-        working-directory: vms/efi/mkosi/ubuntu/x86_64-k8s
+        working-directory: vms/efi/mkosi/debian
         run: |
           echo "## Image pull using ORAS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "oras pull ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}:${{ env.ARTIFACT_TAG }}.gz" >> $GITHUB_STEP_SUMMARY
+          echo "oras pull ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}:${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## CAPI preflight (required before kubeadm)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The image ships with \`docker.service\` and \`containerd.service\` masked." >> $GITHUB_STEP_SUMMARY
+          echo "CAPI must run the following before \`kubeadm init\` / \`kubeadm join\`:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "systemctl unmask containerd.service docker.service" >> $GITHUB_STEP_SUMMARY
+          echo "systemctl enable --now containerd.service" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

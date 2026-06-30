@@ -1,0 +1,7 @@
+Package: *
+Pin: release l=NVIDIA CUDA
+Pin-Priority: 580
+
+Package: cuda-drivers*
+Pin: release l=NVIDIA CUDA
+Pin-Priority: -1

@@ -1,6 +1,0 @@
-# AddressFamily inet
-ForwardAgent yes
-PasswordAuthentication no
-# CheckHostIP no
-# HashKnownHosts no
-# StrictHostKeyChecking no

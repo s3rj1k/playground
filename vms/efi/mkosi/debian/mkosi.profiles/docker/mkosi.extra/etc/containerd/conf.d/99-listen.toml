@@ -1,0 +1,4 @@
+#[plugins.'io.containerd.server.v1.grpc-tcp']
+#  address = '0.0.0.0:2376'
+#[plugins.'io.containerd.server.v1.metrics']
+#  address = '0.0.0.0:1338'

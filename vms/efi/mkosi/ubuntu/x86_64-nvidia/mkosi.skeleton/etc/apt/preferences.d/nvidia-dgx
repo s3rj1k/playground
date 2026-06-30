@@ -1,7 +1,0 @@
-Package: *
-Pin: release l=Base OS Repository
-Pin-Priority: 600
-
-Package: *
-Pin: release l=Base OS Updates Repository
-Pin-Priority: 600

@@ -90,11 +90,14 @@
             name: "{{ item }}"
             masked: yes
           loop:
+            - apparmor.service
+            - firewalld.service
             - lxd-installer.socket
             - plymouth-quit-wait.service
             - plymouth-quit.service
             - plymouth-read-write.service
             - plymouth-start.service
+            - ufw.service
             - snapd.mounts-pre.target
             - snapd.seeded.service
           ignore_errors: true
@@ -381,4 +384,7 @@
         name: "{{ item }}"
         masked: yes
       loop:
+        - apparmor.service
         - display-manager.service
+        - firewalld.service
+        - ufw.service
