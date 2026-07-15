@@ -1,0 +1,126 @@
+name: llama.cpp Standalone (Linux AVX-512)
+
+# Builds a static, self-contained `llama` binary (Linux x86_64, AVX-512)
+# and uploads it as a workflow artifact. BoringSSL is vendored and linked
+# statically for outbound HTTPS support; inbound TLS is still terminated
+# by nginx.
+
+on:
+  workflow_dispatch:
+    inputs:
+      llamacpp_repo:
+        description: "Source repository to clone llama.cpp from"
+        required: true
+        default: "git@github.com:ggml-org/llama.cpp.git"
+        type: choice
+        options:
+          - git@github.com:ggml-org/llama.cpp.git
+          - git@github.com:PrismML-Eng/llama.cpp.git
+      llamacpp_ref:
+        description: "Branch, tag, or commit SHA to build (empty = repo default branch)"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.llamacpp_repo }}-${{ inputs.llamacpp_ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux-avx512:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Resolve repository slug
+        id: repo
+        run: |
+          slug="${{ inputs.llamacpp_repo }}"
+          slug="${slug#git@github.com:}"
+          slug="${slug%.git}"
+          echo "slug=${slug}" >> "$GITHUB_OUTPUT"
+
+      - name: Clone llama.cpp
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.repo.outputs.slug }}
+          ref: ${{ inputs.llamacpp_ref }}
+          path: llama.cpp
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "llama.cpp/tools/ui/package-lock.json"
+
+      - name: Install GCC 14
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14
+
+      - name: Configure
+        working-directory: llama.cpp
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_C_FLAGS="-static-libgcc" \
+            -DCMAKE_CXX_FLAGS="-static-libstdc++ -static-libgcc" \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_OPENSSL=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_APP=ON \
+            -DLLAMA_LLGUIDANCE=ON \
+            -DLLAMA_USE_PREBUILT_UI=OFF \
+            -DGGML_LTO=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CUDA=OFF \
+            -DGGML_AVX=ON \
+            -DGGML_AVX2=ON \
+            -DGGML_F16C=ON \
+            -DGGML_FMA=ON \
+            -DGGML_BMI2=ON \
+            -DGGML_AVX512=ON \
+            -DGGML_AVX512_VBMI=ON \
+            -DGGML_AVX512_VNNI=ON \
+            -DGGML_AVX512_BF16=ON
+
+      - name: Build llama
+        working-directory: llama.cpp
+        run: |
+          time cmake --build build --config Release -j $(nproc) --target llama-app
+
+      - name: Verify self-contained binary
+        working-directory: llama.cpp
+        run: |
+          ldd build/bin/llama
+          bad=$(ldd build/bin/llama | grep -v 'statically linked' \
+                | grep -vE '(linux-vdso|libm\.so|libc\.so|libpthread\.so|libdl\.so|librt\.so|libgomp\.so|ld-linux)' \
+                | grep '\.so' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::llama has non-system .so dependencies:"
+            echo "$bad"
+            exit 1
+          fi
+          # Skipped when the runner has no AVX-512 to avoid SIGILL.
+          if grep -q avx512f /proc/cpuinfo; then
+            mkdir -p /tmp/relocation-check
+            cp build/bin/llama /tmp/relocation-check/
+            /tmp/relocation-check/llama help all >/dev/null
+          fi
+
+      - name: Upload llama (Actions artifact)
+        uses: actions/upload-artifact@v7
+        with:
+          name: llama-linux-x86_64-avx512
+          path: llama.cpp/build/bin/llama
+          if-no-files-found: error
+          retention-days: 1
