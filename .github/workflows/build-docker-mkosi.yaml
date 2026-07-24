@@ -21,9 +21,15 @@ jobs:
           - arch: amd64
             mkosi_arch: x86-64
             runner: ubuntu-24.04
+            profile: docker
           - arch: arm64
             mkosi_arch: arm64
             runner: ubuntu-24.04-arm
+            profile: docker
+          - arch: arm64-vz
+            mkosi_arch: arm64
+            runner: ubuntu-24.04-arm
+            profile: docker,vz
     runs-on: ${{ matrix.runner }}
 
     permissions:
@@ -63,7 +69,7 @@ jobs:
         shell: bash
         working-directory: vms/efi/mkosi/debian
         run: |
-          sudo mkosi --force --profile docker --architecture=${{ matrix.mkosi_arch }} \
+          sudo mkosi --force --profile ${{ matrix.profile }} --architecture=${{ matrix.mkosi_arch }} \
             --tools-tree=default \
             --tools-tree-distribution=debian \
             --tools-tree-release=trixie \

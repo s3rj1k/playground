@@ -16,6 +16,15 @@
     mkosi --architecture=x86-64 build
     mkosi --architecture=arm64 build
 
+*Build RAW image for Apple's Virtualization.framework (vz) on Apple Silicon, e.g. Lima:*
+
+    mkosi --architecture=arm64 --profile=vz build
+
+*Profiles can be combined (comma-separated) to build a vz-flavored variant of another profile:*
+
+    mkosi --architecture=arm64 --profile=docker,vz build
+    mkosi --architecture=arm64 --profile=k8s,vz build
+
 *Build (force) RAW image:*
 
     mkosi --architecture=x86-64 -f build

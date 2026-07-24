@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -x
+
+# mkosi.extra/etc/kernel/cmdline in this profile hardcodes console=hvc0, which
+# only exists under Apple's Virtualization.framework (vz). [Match] sections
+# cannot gate extra trees, so enforce this here instead of silently shipping
+# a broken console on other architectures.
+if [ "$ARCHITECTURE" != "arm64" ]; then
+	echo "vz profile only supports arm64 (Apple Virtualization.framework is arm64-only)" >&2
+	exit 1
+fi
