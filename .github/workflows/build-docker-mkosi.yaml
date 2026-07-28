@@ -44,7 +44,7 @@ jobs:
         uses: oras-project/setup-oras@v2
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -80,7 +80,17 @@ jobs:
 
           echo "ARTIFACT_TAG=${{ github.run_id }}" >> $GITHUB_ENV
 
+      # arm64-vz ships as ASIF instead, converted and pushed by convert-and-push-asif on macos-26
+      - name: Upload raw disk artifact
+        if: matrix.arch == 'arm64-vz'
+        uses: actions/upload-artifact@v7
+        with:
+          name: disk-raw-arm64-vz
+          path: vms/efi/mkosi/debian/disk.vm.raw.gz
+          retention-days: 1
+
       - name: Log in to Container Registry
+        if: matrix.arch != 'arm64-vz'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -88,6 +98,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push image to registry
+        if: matrix.arch != 'arm64-vz'
         shell: bash
         working-directory: vms/efi/mkosi/debian
         run: |
@@ -109,10 +120,74 @@ jobs:
             --artifact-type application/vnd.acme.rocket.config image-builder/images/capi/output/${{ env.MKOSI_IMAGE }}-docker-${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz
 
       - name: Write summary
+        if: matrix.arch != 'arm64-vz'
         shell: bash
         working-directory: vms/efi/mkosi/debian
         run: |
           echo "## Image pull using ORAS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "oras pull ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}-docker:${{ env.ARTIFACT_TAG }}-${{ matrix.arch }}.gz" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  convert-and-push-asif:
+    needs: build-and-push
+    runs-on: macos-26
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download raw disk artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: disk-raw-arm64-vz
+          path: vms/efi/mkosi/debian
+
+      - name: Convert to ASIF
+        shell: bash
+        working-directory: vms/efi/mkosi/debian
+        run: |
+          gunzip disk.vm.raw.gz
+          diskutil image create --verbose from disk.vm.raw --format ASIF disk.vm.asif
+          diskutil image resize disk.vm.asif -s 200Gi
+          rm -f disk.vm.raw
+          gzip disk.vm.asif
+
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image to registry
+        shell: bash
+        working-directory: vms/efi/mkosi/debian
+        run: |
+          oras version
+
+          export DIGEST="$(sha256sum disk.vm.asif.gz | awk '{print $1}')"
+          export TIMESTAMP="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+          mv -v disk.vm.asif.gz ${{ env.MKOSI_IMAGE }}-docker-${{ github.run_id }}-arm64-vz.asif.gz
+
+          oras push ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}-docker:${{ github.run_id }}-arm64-vz.asif.gz \
+            --annotation "org.opencontainers.image.authors=${{ github.actor }}" \
+            --annotation "org.opencontainers.image.created=${TIMESTAMP}" \
+            --annotation "org.opencontainers.image.title=${{ env.MKOSI_IMAGE }}-docker" \
+            --annotation "org.opencontainers.image.version=${{ github.run_id }}" \
+            --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
+            --annotation "org.opencontainers.image.base.digest=${DIGEST}" \
+            --artifact-type application/vnd.acme.rocket.config ${{ env.MKOSI_IMAGE }}-docker-${{ github.run_id }}-arm64-vz.asif.gz
+
+      - name: Write summary
+        shell: bash
+        run: |
+          echo "## Image pull using ORAS" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "oras pull ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}-docker:${{ github.run_id }}-arm64-vz.asif.gz" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
