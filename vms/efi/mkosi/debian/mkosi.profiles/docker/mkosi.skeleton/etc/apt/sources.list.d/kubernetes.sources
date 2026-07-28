@@ -1,0 +1,7 @@
+X-Repolib-Name: kubernetes
+Types: deb
+URIs: https://prod-cdn.packages.k8s.io/repositories/isv:/kubernetes:/core:/stable:/v1.36/deb/
+Signed-By: /etc/apt/keyrings/kubernetes.asc
+Suites: /
+Architectures: amd64 arm64
+Enabled: yes

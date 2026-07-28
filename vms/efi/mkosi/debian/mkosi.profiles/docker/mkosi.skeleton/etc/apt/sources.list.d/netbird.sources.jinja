@@ -1,0 +1,9 @@
+# curl -fsSL https://pkgs.netbird.io/debian/public.key | gpg --dearmor --output /etc/apt/keyrings/netbird-archive-keyring.gpg
+X-Repolib-Name: netbird
+Types: deb
+URIs: https://pkgs.netbird.io/debian
+Signed-By: /etc/apt/keyrings/netbird-archive-keyring.gpg
+Suites: stable
+Components: main
+Architectures: {{ "amd64" if architecture == "x86-64" else architecture }}
+Enabled: yes
