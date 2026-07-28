@@ -1,12 +1,12 @@
 name: Kubernetes Image Builder (mkosi)
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/build-k8s-mkosi.yaml"
-      - "vms/efi/mkosi/debian/**"
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - ".github/workflows/build-k8s-mkosi.yaml"
+  #     - "vms/efi/mkosi/debian/**"
   workflow_dispatch:
 
 env:

@@ -1,1 +1,1 @@
-console=ttyAMA0 rd.emergency=poweroff
+console=ttyAMA0 rd.emergency=poweroff audit=0
