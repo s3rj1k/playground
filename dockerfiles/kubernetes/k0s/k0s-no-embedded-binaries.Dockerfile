@@ -16,7 +16,7 @@ FROM docker.io/library/golang:alpine AS builder
 RUN apk add --no-cache make git gcc musl-dev binutils-gold
 
 ARG K0S_REPO=https://github.com/k0sproject/k0s.git
-ARG K0S_VERSION=release-1.34
+ARG K0S_VERSION=release-1.36
 
 WORKDIR /workspace
 
