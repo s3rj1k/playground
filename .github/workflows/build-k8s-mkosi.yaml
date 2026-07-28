@@ -174,11 +174,8 @@ jobs:
         uses: oras-project/setup-oras@v2
 
       - name: Log in to Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
 
       - name: Push image to registry
         shell: bash
@@ -194,7 +191,7 @@ jobs:
           oras push ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}-k8s:${{ env.ARTIFACT_TAG }}-arm64-vz.asif.gz \
             --annotation "org.opencontainers.image.authors=${{ github.actor }}" \
             --annotation "org.opencontainers.image.created=${TIMESTAMP}" \
-            --annotation "org.opencontainers.image.title=${{ env.MKOSI_IMAGE }}-k8s" \
+            --annotation "org.opencontainers.image.title=${{ env.MKOSI_IMAGE }}-k8s-vz" \
             --annotation "org.opencontainers.image.version=${{ env.ARTIFACT_TAG }}" \
             --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
             --annotation "org.opencontainers.image.base.digest=${DIGEST}" \

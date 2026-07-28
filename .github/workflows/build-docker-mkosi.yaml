@@ -14,22 +14,73 @@ env:
   MKOSI_IMAGE: debian-trixie
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-24.04
+
+    outputs:
+      matrix: ${{ steps.push.outputs.matrix || steps.full.outputs.matrix }}
+
+    steps:
+      - name: "Set matrix (push: arm64-vz only)"
+        if: github.event_name == 'push'
+        id: push
+        shell: bash
+        run: |
+          {
+            echo "matrix<<EOF"
+            cat <<'JSON'
+          {
+            "include": [
+              {
+                "arch": "arm64-vz",
+                "mkosi_arch": "arm64",
+                "runner": "ubuntu-24.04-arm",
+                "profile": "docker,vz"
+              }
+            ]
+          }
+          JSON
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set matrix (full)
+        if: github.event_name != 'push'
+        id: full
+        shell: bash
+        run: |
+          {
+            echo "matrix<<EOF"
+            cat <<'JSON'
+          {
+            "include": [
+              {
+                "arch": "amd64",
+                "mkosi_arch": "x86-64",
+                "runner": "ubuntu-24.04",
+                "profile": "docker"
+              },
+              {
+                "arch": "arm64",
+                "mkosi_arch": "arm64",
+                "runner": "ubuntu-24.04-arm",
+                "profile": "docker"
+              },
+              {
+                "arch": "arm64-vz",
+                "mkosi_arch": "arm64",
+                "runner": "ubuntu-24.04-arm",
+                "profile": "docker,vz"
+              }
+            ]
+          }
+          JSON
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
   build-and-push:
+    needs: generate-matrix
     strategy:
-      matrix:
-        include:
-          - arch: amd64
-            mkosi_arch: x86-64
-            runner: ubuntu-24.04
-            profile: docker
-          - arch: arm64
-            mkosi_arch: arm64
-            runner: ubuntu-24.04-arm
-            profile: docker
-          - arch: arm64-vz
-            mkosi_arch: arm64
-            runner: ubuntu-24.04-arm
-            profile: docker,vz
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
 
     permissions:
@@ -158,11 +209,8 @@ jobs:
         uses: oras-project/setup-oras@v2
 
       - name: Log in to Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
 
       - name: Push image to registry
         shell: bash
@@ -178,7 +226,7 @@ jobs:
           oras push ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.MKOSI_IMAGE }}-docker:${{ github.run_id }}-arm64-vz.asif.gz \
             --annotation "org.opencontainers.image.authors=${{ github.actor }}" \
             --annotation "org.opencontainers.image.created=${TIMESTAMP}" \
-            --annotation "org.opencontainers.image.title=${{ env.MKOSI_IMAGE }}-docker" \
+            --annotation "org.opencontainers.image.title=${{ env.MKOSI_IMAGE }}-docker-vz" \
             --annotation "org.opencontainers.image.version=${{ github.run_id }}" \
             --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
             --annotation "org.opencontainers.image.base.digest=${DIGEST}" \
