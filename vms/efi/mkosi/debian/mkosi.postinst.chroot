@@ -41,6 +41,20 @@ if [ -e /etc/ssh/sshd_config ]; then
 	sed -i -e 's/^PermitRootLogin .*/PermitRootLogin without-password/' /etc/ssh/sshd_config
 fi
 
+# Render *.sources.jinja apt sources (mkosi doesn't do this itself)
+python3 - <<'EOF'
+import glob
+import os
+
+import jinja2
+
+for src in glob.glob("/etc/apt/sources.list.d/*.sources.jinja"):
+	dst = src.removesuffix(".jinja")
+	rendered = jinja2.Template(open(src).read()).render(architecture=os.environ["ARCHITECTURE"])
+	open(dst, "w").write(rendered)
+	os.remove(src)
+EOF
+
 # Cleanup directories
 cleanup_dirs=(
 	dev
