@@ -37,8 +37,17 @@ sed -i 's/^\([^#].*[[:space:]]\+swap[[:space:]]\+.*\)$/#\1/' /etc/fstab
 
 # Tweak SSHD config
 if [ -e /etc/ssh/sshd_config ]; then
-	sed -i -e 's/^#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-	sed -i -e 's/^PermitRootLogin .*/PermitRootLogin without-password/' /etc/ssh/sshd_config
+	sed -i \
+		-e '/^[[:space:]]*#*[[:space:]]*Include/d' \
+		-e '/^[[:space:]]*#*[[:space:]]*PermitRootLogin/d' \
+		-e '/^[[:space:]]*#*[[:space:]]*PasswordAuthentication/d' \
+		-e '/^[[:space:]]*#*[[:space:]]*PermitEmptyPasswords/d' \
+		-e '$a\PermitRootLogin prohibit-password' \
+		-e '$a\PasswordAuthentication no' \
+		-e '$a\PermitEmptyPasswords no' \
+		-e '$a\DebianBanner no' \
+		-e '$a\VersionAddendum none' \
+		/etc/ssh/sshd_config
 fi
 
 # Render *.sources.jinja apt sources (mkosi doesn't do this itself)
