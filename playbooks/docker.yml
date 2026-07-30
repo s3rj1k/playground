@@ -125,12 +125,12 @@
               {
                 "default-address-pools": [
                   {
-                    "base": "172.17.0.0/16",
+                    "base": "10.42.0.0/16",
                     "size": 24
                   }
                 ],
                 "dns": [
-                  "172.17.0.1"
+                  "10.42.0.1"
                 ],
                 "insecure-registries": [
                   "127.0.0.1:4269"
@@ -165,12 +165,12 @@
               {
                 "default-address-pools": [
                   {
-                    "base": "172.17.0.0/16",
+                    "base": "10.42.0.0/16",
                     "size": 24
                   }
                 ],
                 "dns": [
-                  "172.17.0.1"
+                  "10.42.0.1"
                 ],
                 "insecure-registries": [
                   "127.0.0.1:4269"
@@ -220,7 +220,7 @@
             dest: /etc/systemd/resolved.conf.d/global.conf
             content: |
               [Resolve]
-              DNSStubListenerExtra=172.17.0.1
+              DNSStubListenerExtra=10.42.0.1
 
               MulticastDNS=no
               LLMNR=no

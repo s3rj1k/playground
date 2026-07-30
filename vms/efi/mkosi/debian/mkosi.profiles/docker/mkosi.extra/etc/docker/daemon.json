@@ -1,13 +1,16 @@
 {
+  "experimental": false,
   "default-address-pools": [
     {
-      "base": "172.17.0.0/16",
+      "base": "10.42.0.0/16",
       "size": 24
     }
   ],
   "dns": [
-    "172.17.0.1"
+    "10.42.0.1"
   ],
+  "insecure-registries": [],
+  "registry-mirrors": [],
   "builder": {
     "gc": {
       "enabled": true,
