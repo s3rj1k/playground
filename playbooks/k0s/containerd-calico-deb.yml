@@ -15,10 +15,13 @@
   gather_facts: true
   ignore_errors: false
   vars:
-    K0S_MAJOR_MINOR_VERSION: "1.35"
+    K0S_MAJOR_MINOR_VERSION: "1.36"
     API_ADDRESS: ""           # api.address + etcd.peerAddress; empty => host primary IP
     K0S_API_PORT: 9643        # off default 9443 so BMO's :9443 webhook can bind
     API_SANS: "169.254.1.42"  # extra API cert SANs, comma-separated; empty to skip
+    REGISTRY_MIRROR: ""       # pull-through mirror for docker.io/quay.io/gcr.io/registry.k8s.io/k8s.gcr.io; empty to skip
+    # make nvidia-container-runtime the default containerd runtime; requires nvidia-container-toolkit pre-installed
+    ENABLE_NVIDIA_RUNTIME: false
 
   pre_tasks:
     - name: Check if system is supported
@@ -79,9 +82,24 @@
     - name: Configure k0s embedded containerd
       # containerd.d/*.toml drop-ins merge into k0s's containerd config on first
       # start; registry certs.d/hosts.toml live under config_path.
+      # k0s 1.36 ships containerd 2.x: the CRI plugin is split into
+      # io.containerd.cri.v1.images / io.containerd.cri.v1.runtime and drop-ins
+      # must use config version 3 -- the old io.containerd.grpc.v1.cri path now
+      # fails k0s's pre-flight checks outright.
       # https://docs.k0sproject.io/head/runtime/
       vars:
         local_registry: "{{ k0s_api_address }}:4269"  # local self-signed registry
+        registry_mirrors:
+          - prefix: docker.io
+            server: https://registry-1.docker.io
+          - prefix: quay.io
+            server: https://quay.io
+          - prefix: gcr.io
+            server: https://gcr.io
+          - prefix: registry.k8s.io
+            server: https://registry.k8s.io
+          - prefix: k8s.gcr.io
+            server: https://k8s.gcr.io
       block:
         - name: Create k0s containerd drop-in directory
           file:
@@ -93,7 +111,9 @@
           copy:
             dest: /etc/k0s/containerd.d/00-registry.toml
             content: |
-              [plugins."io.containerd.grpc.v1.cri".registry]
+              version = 3
+
+              [plugins."io.containerd.cri.v1.images".registry]
                 config_path = "/etc/k0s/containerd-certs.d"
             mode: "0644"
 
@@ -102,7 +122,9 @@
             dest: /etc/k0s/containerd.d/10-discard-unpacked-layers.toml
             content: |
               # Drop compressed blobs after unpack (~half the disk); re-pull if GC'd.
-              [plugins."io.containerd.grpc.v1.cri".containerd]
+              version = 3
+
+              [plugins."io.containerd.cri.v1.images"]
                 discard_unpacked_layers = true
             mode: "0644"
 
@@ -122,6 +144,55 @@
                 capabilities = ["pull", "resolve"]
                 skip_verify = true
             mode: "0644"
+
+        - name: Create certs.d directories for upstream registry mirrors
+          file:
+            path: "/etc/k0s/containerd-certs.d/{{ item.prefix }}"
+            state: directory
+            mode: "0755"
+          loop: "{{ registry_mirrors }}"
+          loop_control:
+            label: "{{ item.prefix }}"
+          when: REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0
+
+        - name: Mirror upstream registries through REGISTRY_MIRROR
+          copy:
+            dest: "/etc/k0s/containerd-certs.d/{{ item.prefix }}/hosts.toml"
+            content: |
+              server = "{{ item.server }}"
+
+              [host."https://{{ REGISTRY_MIRROR }}"]
+                capabilities = ["pull", "resolve"]
+            mode: "0644"
+          loop: "{{ registry_mirrors }}"
+          loop_control:
+            label: "{{ item.prefix }}"
+          when: REGISTRY_MIRROR is defined and REGISTRY_MIRROR | trim | length > 0
+
+        - name: Make nvidia-container-runtime the default containerd runtime
+          # SystemdCgroup=false here deliberately matches containerd's own default
+          # for the stock "runc" runtime, so there's no cgroup-driver mismatch
+          # between GPU and non-GPU pods on this node.
+          # https://github.com/s3rj1k/k0s-dpu-bootstrapper/blob/main/examples/containerd-nvidia.toml
+          copy:
+            dest: /etc/k0s/containerd.d/nvidia.toml
+            content: |
+              version = 3
+
+              [plugins]
+                [plugins."io.containerd.cri.v1.runtime"]
+                  [plugins."io.containerd.cri.v1.runtime".containerd]
+                    default_runtime_name = "nvidia"
+                    [plugins."io.containerd.cri.v1.runtime".containerd.runtimes]
+                      [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.nvidia]
+                        runtime_type = "io.containerd.runc.v2"
+                        privileged_without_host_devices = false
+                        sandboxer = "podsandbox"
+                        [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.nvidia.options]
+                          BinaryName = "/usr/bin/nvidia-container-runtime"
+                          SystemdCgroup = false
+            mode: "0644"
+          when: ENABLE_NVIDIA_RUNTIME | default(false) | bool
 
     - name: Install k0s
       block:
@@ -226,7 +297,7 @@
                             memory: 2Gi
                           numaNode: 0
                       kubeReservedCgroup: ""
-            marker: ""
+            marker: "# {mark} ANSIBLE MANAGED BLOCK - k0s ClusterConfig"
             mode: "0644"
 
         - name: Create systemd override directory for k0scontroller
